@@ -1,23 +1,28 @@
 #!/usr/bin/env python3
 """
-UI Generator - Genera specifiche UI tool-agnostic dalla macchina a stati.
+UI Generator Dinamico - Genera specifiche UI usando un LLM.
 
-Legge spec_machine.json e project_context.md, genera:
-1. output/ui_specs/README.md — Indice delle UI con link
-2. output/ui_specs/UI_<stato>.md — Prompt dettagliato per ogni stato UI
+Legge spec_machine.json e project_context.md, usa un LLM per generare:
+1. output/ui_specs/states/UI_<stato>.md — Specifiche per ogni stato macchina
+2. output/ui_specs/screens/<screen>.md — Specifiche per ogni schermata reale
+3. output/ui_specs/README.md — Indice con diagramma PlantUML
 
-Output completamente indipendente da qualsiasi strumento di UI generation.
+Il LLM analizza la macchina a stati e il contesto per generare UI specs
+realistiche e coerenti con il prodotto reale.
 """
 
 import json
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
-
-# Stati che sono "transitori" (loading, authenticating) e non meritano una UI spec
-TRANSIENT_STATES = {"caricamento", "authenticating"}
+# Configurazione LLM
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai")  # openai, anthropic, ollama
+LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-4o")  # o "claude-3-5-sonnet-20241022", "llama3"
+LLM_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "")  # Per Ollama o altri provider
 
 
 def load_machine(path: str) -> dict:
@@ -30,423 +35,390 @@ def load_context(path: str) -> str:
         return f.read()
 
 
-def get_state_description(state_name: str, state_def: dict, context: str) -> str:
-    """Genera una descrizione testuale dello stato basata su entry/exit actions."""
-    entry = state_def.get("entry", [])
-    exit_actions = state_def.get("exit", [])
-    
-    descriptions = {
-        "app_idle": "Schermata iniziale dell'applicazione. Punto di ingresso del flusso, dove l'utente avvia il processo o si trova prima dell'autenticazione.",
-        "iniziale": "Schermata di validazione iniziale. L'utente inserisce i dati di accesso o le credenziali. Vengono validati i parametri prima di procedere.",
-        "caricamento": "Stato transitorio di loading. Mostra skeleton UI mentre i dati vengono caricati dal server. Non è una schermata permanente.",
-        "vuoto": "Schermata quando non ci sono dati da visualizzare. L'utente può ricaricare o tornare indietro.",
-        "errore": "Schermata di errore. Mostra banner e toast di errore quando si verifica un problema (rete, timeout, ecc.).",
-        "successo": "Schermata principale con dati caricati con successo. Dashboard o vista principale dell'applicazione.",
-        "sessione_scaduta": "Schermata di riautenticazione. Appare quando la sessione è scaduta e l'utente deve effettuare nuovamente il login.",
-        "authenticating": "Stato transitorio di verifica token. Non visibile all'utente, gestisce la validazione delle credenziali.",
-    }
-    
-    return descriptions.get(state_name, f"Stato '{state_name}' nel flusso dell'applicazione.")
+def load_spec(path: str) -> str:
+    with open(path, "r") as f:
+        return f.read()
 
 
-def get_state_context(state_name: str, state_def: dict, machine: dict) -> dict:
-    """Determina da dove si arriva e dove si può andare."""
-    states = machine.get("states", {})
+def call_llm(prompt: str, system_prompt: str = "", max_tokens: int = 4096) -> str:
+    """Chiama il LLM configurato e ritorna la risposta."""
+    if LLM_PROVIDER == "openai":
+        return _call_openai(prompt, system_prompt, max_tokens)
+    elif LLM_PROVIDER == "anthropic":
+        return _call_anthropic(prompt, system_prompt, max_tokens)
+    elif LLM_PROVIDER == "ollama":
+        return _call_ollama(prompt, system_prompt, max_tokens)
+    else:
+        raise ValueError(f"Provider LLM non supportato: {LLM_PROVIDER}")
+
+
+def _call_openai(prompt: str, system_prompt: str, max_tokens: int) -> str:
+    """Chiama OpenAI API."""
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL or None)
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        
+        response = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=0.7,
+        )
+        return response.choices[0].message.content
+    except ImportError:
+        print("❌ Installa openai: pip install openai")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ Errore OpenAI: {e}")
+        sys.exit(1)
+
+
+def _call_anthropic(prompt: str, system_prompt: str, max_tokens: int) -> str:
+    """Chiama Anthropic API."""
+    try:
+        from anthropic import Anthropic
+        client = Anthropic(api_key=LLM_API_KEY)
+        
+        response = client.messages.create(
+            model=LLM_MODEL,
+            max_tokens=max_tokens,
+            system=system_prompt,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.content[0].text
+    except ImportError:
+        print("❌ Installa anthropic: pip install anthropic")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ Errore Anthropic: {e}")
+        sys.exit(1)
+
+
+def _call_ollama(prompt: str, system_prompt: str, max_tokens: int) -> str:
+    """Chiama Ollama API (locale)."""
+    try:
+        import requests
+        url = LLM_BASE_URL or "http://localhost:11434"
+        payload = {
+            "model": LLM_MODEL,
+            "prompt": prompt,
+            "system": system_prompt,
+            "stream": False,
+            "options": {
+                "num_predict": max_tokens,
+                "temperature": 0.7,
+            }
+        }
+        response = requests.post(f"{url}/api/generate", json=payload, timeout=120)
+        response.raise_for_status()
+        return response.json().get("response", "")
+    except ImportError:
+        print("❌ Installa requests: pip install requests")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ Errore Ollama: {e}")
+        sys.exit(1)
+
+
+def generate_state_spec_llm(state_name: str, state_def: dict, machine: dict, context: str, spec: str) -> str:
+    """Genera UI spec per uno stato usando il LLM."""
     
-    # Trova stati che portano a questo stato
-    incoming = []
-    for s_name, s_def in states.items():
+    # Costruisci il contesto per il LLM
+    states_info = json.dumps({state_name: state_def}, indent=2)
+    
+    # Trova stati correlati (incoming/outgoing)
+    related = []
+    for s_name, s_def in machine.get("states", {}).items():
         transitions = s_def.get("on", {})
         if state_name in transitions.values():
             event = [k for k, v in transitions.items() if v == state_name][0]
-            incoming.append((s_name, event))
+            related.append(f"- Da {s_name} tramite evento {event}")
+        if state_name == s_name:
+            for event, dest in transitions.items():
+                related.append(f"- Verso {dest} tramite evento {event}")
     
-    # Trova stati di destinazione
-    outgoing = []
-    transitions = state_def.get("on", {})
-    for event, dest in transitions.items():
-        outgoing.append((dest, event))
+    prompt = f"""Sei un Senior Product Manager e UI/UX Designer. Analizza lo stato della macchina a stati e genera una specifica UI completa.
+
+## Contesto del Progetto
+{context[:2000]}
+
+## Specifica Funzionale
+{spec[:2000]}
+
+## Stato da Analizzare
+```json
+{states_info}
+```
+
+## Transizioni Correlate
+{chr(10).join(related) if related else 'Nessuna transizione trovata'}
+
+## Entry/Exit Actions
+Entry: {state_def.get('entry', [])}
+Exit: {state_def.get('exit', [])}
+
+## Istruzioni
+Genera un file Markdown completo per lo stato '{state_name}' che includa:
+
+1. **Descrizione** — Cosa mostra questa schermata/stato all'utente
+2. **Contesto** — Da dove si arriva e dove si può andare
+3. **Dati Necessari** — Tabella con campi, tipi e descrizioni (basati sul contesto del progetto)
+4. **Componenti UI** — Lista dei componenti visivi con tipo, elementi e interazioni
+5. **Vincoli e Regole** — Regole di business e vincoli tecnici
+6. **Note UI** — Layout, colori, animazioni, pattern
+7. **Flusso Utente** — Diagramma testuale del flusso
+8. **Riferimento Tecnico** — Entry/Exit actions
+
+IMPORTANTE:
+- Sii specifico e concreto, basati sul contesto del progetto reale
+- Genera dati mock realistici (nomi, prezzi, ecc.)
+- Descrivi componenti UI reali (card, badge, grafici, ecc.)
+- Il file deve essere pronto per essere usato da un developer o da un AI UI generator
+"""
+
+    system_prompt = "Sei un esperto di specifiche UI/UX. Generi documentazione tecnica dettagliata e pronta per l'implementazione."
     
-    return {
-        "incoming": incoming,
-        "outgoing": outgoing,
-    }
+    return call_llm(prompt, system_prompt)
 
 
-def get_mock_data(state_name: str, context: str) -> list:
-    """Genera mock data realistici basati sul contesto del progetto."""
-    mock_data = {
-        "app_idle": [
-            ("email", "string", "Email dell'utente (es. demo@vetunita.it)"),
-            ("password", "string", "Password (min. 8 caratteri)"),
-        ],
-        "iniziale": [
-            ("credentials", "object", "Credenziali di accesso validate"),
-            ("config", "object", "Configurazione dell'app caricata"),
-        ],
-        "vuoto": [
-            ("message", "string", "Nessun dato disponibile da visualizzare"),
-            ("action_hint", "string", "Prova a ricaricare la pagina"),
-        ],
-        "errore": [
-            ("error_code", "string", "Codice errore (es. NET_001, TIMEOUT_001)"),
-            ("error_message", "string", "Messaggio descrittivo per l'utente"),
-            ("retry_available", "boolean", "Se è possibile riprovare"),
-        ],
-        "successo": [
-            ("risparmio_ytd", "number", "Risparmio totale anno in corso (es. $42,850)"),
-            ("distributori", "array", "Lista distributori con percentuali"),
-            ("acquisti_recenti", "array", "Ultimi acquisti effettuati"),
-            ("cluster_info", "object", "Informazioni sul cluster di appartenenza"),
-        ],
-        "sessione_scaduta": [
-            ("redirect_url", "string", "URL della pagina di login"),
-            ("message", "string", "La sessione è scaduta, effettua nuovamente il login"),
-        ],
-    }
+def generate_screen_spec_llm(screen_name: str, related_states: list, machine: dict, context: str, spec: str) -> str:
+    """Genera UI spec per una schermata reale usando il LLM."""
     
-    return mock_data.get(state_name, [])
+    # Estrai informazioni sugli stati correlati
+    states_info = {}
+    for state_name in related_states:
+        if state_name in machine.get("states", {}):
+            states_info[state_name] = machine["states"][state_name]
+    
+    prompt = f"""Sei un Senior Product Manager e UI/UX Designer. Analizza gli stati della macchina a stati e genera una specifica UI completa per la schermata reale del prodotto.
+
+## Contesto del Progetto
+{context[:3000]}
+
+## Specifica Funzionale
+{spec[:3000]}
+
+## Schermata da Generare
+{screen_name}
+
+## Stati della Macchina Correlati
+```json
+{json.dumps(states_info, indent=2)}
+```
+
+## Istruzioni
+Genera un file Markdown completo per la schermata '{screen_name}' che includa:
+
+1. **Descrizione** — Cosa fa questa schermata nel prodotto reale
+2. **Contesto** — Da dove si arriva (navigazione) e dove si può andare
+3. **Dati Necessari** — Tabella con tutti i campi dati necessari (mock data realistici)
+4. **Componenti UI** — Lista dettagliata di tutti i componenti visivi:
+   - Nome componente
+   - Tipo (card, lista, grafico, badge, ecc.)
+   - Elementi che contiene
+   - Interazioni possibili
+5. **Stati della Macchina Correlati** — Tabella che mappa ogni stato UI (loading, successo, errore, vuoto) con link ai file states/
+6. **Vincoli e Regole** — Regole di business, validazioni, cache, ecc.
+7. **Note UI** — Layout, colori, animazioni, pattern specifici
+8. **Flusso Utente** — Diagramma testuale del flusso completo
+9. **Riferimento Tecnico** — Entry/Exit actions
+
+IMPORTANTE:
+- Sii specifico e concreto, basati SUL CONTESTO REALE DEL PROGETTO
+- Genera nomi realistici per farmaci, prezzi, distributori, ecc.
+- Descrivi componenti UI che un developer può implementare
+- Pensa a come apparirebbe l'app reale sullo schermo
+- Il file deve essere pronto per essere usato da un developer o da un AI UI generator (v0, Claude Artifacts, ecc.)
+"""
+
+    system_prompt = "Sei un esperto di specifiche UI/UX per app mobile. Generi documentazione tecnica dettagliata con componenti UI concreti e realistici."
+    
+    return call_llm(prompt, system_prompt)
 
 
-def get_interactions(state_name: str, state_def: dict) -> list:
-    """Estrae le interazioni possibili dallo stato."""
-    transitions = state_def.get("on", {})
-    interactions = []
+def generate_index_llm(states: dict, screens: list, machine: dict) -> str:
+    """Genera il README.md con indice usando il LLM."""
     
-    interaction_names = {
-        "AVVIA_CARICAMENTO": ("Avvia", "Pulsante principale per iniziare il flusso"),
-        "START_FLOW": ("Inizia", "Pulsante per avviare il processo"),
-        "VALIDATE_TOKEN": ("Accedi", "Pulsante di login/autenticazione"),
-        "INPUT_INVALIDO": ("Correggi", "Azione per correggere input errato"),
-        "VALIDATE_AND_LOAD": ("Conferma e Carica", "Convalida i dati e avvia il caricamento"),
-        "DATI_CARICATI": ("Continua", "Procedi con i dati caricati"),
-        "ERRORE_RETE": ("Riprova", "Riprovare l'operazione"),
-        "TIMEOUT": ("Riprova", "Riprovare per timeout"),
-        "FETCH_SUCCESS": ("Visualizza", "Visualizza i dati caricati"),
-        "FETCH_EMPTY": ("Ricarica", "Ricarica la pagina"),
-        "FETCH_ERROR": ("Riprova", "Riprovare il caricamento"),
-        "RICARICA": ("Ricarica", "Ricarica i dati"),
-        "ANNULLA": ("Annulla", "Torna indietro / Annulla"),
-        "RIPROVA": ("Riprova", "Riprovare l'operazione"),
-        "RIAUTENTICAZIONE": ("Riautenticati", "Effettuare nuovamente il login"),
-        "TOKEN_VALIDO": ("Procedi", "Token valido, procedi"),
-        "TORNA_INDIETRO": ("Torna Indietro", "Torna alla schermata precedente"),
-        "AGGIORNA": ("Aggiorna", "Aggiorna i dati"),
-    }
+    states_list = ", ".join([f"`{s}`" for s in states.keys()])
+    screens_list = ", ".join([f"`{s}`" for s in screens])
     
-    for event, dest in transitions.items():
-        label, desc = interaction_names.get(event, (event.replace("_", " ").title(), f"Evento: {event}"))
-        interactions.append({
-            "label": label,
-            "event": event,
-            "destination": dest,
-            "description": desc,
-        })
+    prompt = f"""Genera un README.md per l'indice delle UI specifications.
+
+## Stati della Macchina ({len(states)}):
+{states_list}
+
+## Schermate Reali ({len(screens)}):
+{screens_list}
+
+## Istruzioni
+Genera un README.md con:
+1. Titolo e descrizione
+2. Tabella schermate reali con link
+3. Tabella stati macchina con link
+4. Diagramma PlantUML del flusso completo
+5. Mappatura schermate → stati
+6. Sezione "Come usare" con istruzioni per AI UI generators
+7. Flussi principali
+
+Usa emoji, tabelle formattate bene, e un tono professionale.
+"""
+
+    system_prompt = "Sei un technical writer. Generi documentazione chiara e ben formattata."
     
-    return interactions
+    return call_llm(prompt, system_prompt)
 
 
-def get_constraints(state_name: str, state_def: dict) -> list:
-    """Genera vincoli e regole per lo stato."""
-    constraints = {
-        "app_idle": [
-            "I campi email e password devono essere validi prima di abilitare il pulsante di accesso",
-            "Deve essere presente un link per 'Password dimenticata?'",
-            "Supporto per accesso guest/demo",
-        ],
-        "iniziale": [
-            "Validazione input prima del caricamento",
-            "Configurazione caricata prima di procedere",
-            "Gestione input invalido con messaggio chiaro",
-        ],
-        "vuoto": [
-            "Mostrare un'illustrazione o icona per stato vuoto",
-            "Testo descrittivo che spiega perché non ci sono dati",
-            "Azione di ricarica sempre disponibile",
-        ],
-        "errore": [
-            "Messaggio di errore chiaro e non tecnico",
-            "Azione di retry sempre disponibile quando possibile",
-            "Logging dell'errore per debugging",
-            "Possibilità di contattare il supporto",
-        ],
-        "successo": [
-            "Pull-to-refresh per aggiornare i dati",
-            "Skeleton loading durante l'aggiornamento",
-            "Cache dei dati per accesso offline",
-            "Gestione sessione scaduta durante la visualizzazione",
-        ],
-        "sessione_scaduta": [
-            "Salvataggio dello stato corrente prima del redirect",
-            "Possibilità di tornare alla schermata precedente dopo il login",
-            "Clear dei token scaduti",
-        ],
-    }
-    
-    return constraints.get(state_name, [])
-
-
-def get_ui_notes(state_name: str, state_def: dict) -> list:
-    """Note UI generiche per lo stato."""
-    notes = {
-        "app_idle": [
-            "Layout centrato con card di login",
-            "Logo dell'app in alto",
-            "Campi input con icone (email, lock)",
-            "Pulsante primario grande e visibile",
-            "Link secondari in basso (password dimenticata, registrazione)",
-        ],
-        "iniziale": [
-            "Form con validazione inline",
-            "Feedback visivo per campi validi/invalidi",
-            "Pulsante disabilitato fino a validazione completa",
-        ],
-        "vuoto": [
-            "Illustrazione SVG/animata per stato vuoto",
-            "Testo descrittivo centrato",
-            "Pulsante di azione principale (ricarica)",
-            "Design pulito e non frustrante",
-        ],
-        "errore": [
-            "Icona di errore visibile (⚠️ o similar)",
-            "Banner rosso in alto o messaggio centrato",
-            "Toast di errore per dettagli tecnici",
-            "Pulsante di retry prominente",
-        ],
-        "successo": [
-            "Dashboard con griglia di card",
-            "Grafici a barre per confronti",
-            "Badge e indicatori di stato",
-            "Pull-to-refresh gesture",
-            "Skeleton shimmer durante loading",
-        ],
-        "sessione_scaduta": [
-            "Modal o schermata intera con overlay",
-            "Messaggio chiaro sulla scadenza sessione",
-            "Pulsante di login prominente",
-            "Opzione per salvare il lavoro corrente",
-        ],
-    }
-    
-    return notes.get(state_name, [])
-
-
-def generate_ui_spec(state_name: str, state_def: dict, machine: dict, context: str) -> str:
-    """Genera il contenuto Markdown per uno stato UI."""
-    description = get_state_description(state_name, state_def, context)
-    ctx = get_state_context(state_name, state_def, machine)
-    mock_data = get_mock_data(state_name, context)
-    interactions = get_interactions(state_name, state_def)
-    constraints = get_constraints(state_name, state_def)
-    ui_notes = get_ui_notes(state_name, state_def)
-    
-    # Header
-    md = f"# Stato: `{state_name}`\n\n"
-    md += f"## Descrizione\n\n{description}\n\n"
-    
-    # Contesto
-    md += "## Contesto\n\n"
-    if ctx["incoming"]:
-        md += "**Da dove si arriva:**\n"
-        for src, event in ctx["incoming"]:
-            md += f"- `{src}` → evento `{event}`\n"
-    else:
-        md += "- Stato iniziale del flusso\n"
-    md += "\n"
-    
-    if ctx["outgoing"]:
-        md += "**Dove si può andare:**\n"
-        for dest, event in ctx["outgoing"]:
-            md += f"- `{event}` → `{dest}`\n"
-    md += "\n"
-    
-    # Dati Necessari
-    if mock_data:
-        md += "## Dati Necessari\n\n"
-        for name, type_, desc in mock_data:
-            md += f"- **`{name}`** ({type_}): {desc}\n"
-        md += "\n"
-    
-    # Azioni/Interazioni
-    if interactions:
-        md += "## Azioni/Interazioni\n\n"
-        md += "| Azione | Evento | Destinazione | Descrizione |\n"
-        md += "|--------|--------|--------------|-------------|\n"
-        for inter in interactions:
-            md += f"| {inter['label']} | `{inter['event']}` | `{inter['destination']}` | {inter['description']} |\n"
-        md += "\n"
-    
-    # Vincoli e Regole
-    if constraints:
-        md += "## Vincoli e Regole\n\n"
-        for c in constraints:
-            md += f"- {c}\n"
-        md += "\n"
-    
-    # Note UI
-    if ui_notes:
-        md += "## Note UI\n\n"
-        for note in ui_notes:
-            md += f"- {note}\n"
-        md += "\n"
-    
-    # Entry/Exit Actions (riferimento tecnico)
-    entry = state_def.get("entry", [])
-    exit_actions = state_def.get("exit", [])
-    if entry or exit_actions:
-        md += "## Riferimento Tecnico (Entry/Exit Actions)\n\n"
-        if entry:
-            md += "**Entry:**\n"
-            for a in entry:
-                md += f"- `{a}`\n"
-        if exit_actions:
-            md += "\n**Exit:**\n"
-            for a in exit_actions:
-                md += f"- `{a}`\n"
-        md += "\n"
-    
-    return md
-
-
-def generate_index(states: dict, machine: dict, output_dir: str) -> str:
-    """Genera il README.md con l'indice di tutte le UI specs."""
-    md = "# UI Specifications — Indice\n\n"
-    md += f"Generato il: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
-    md += "Questo file contiene l'indice di tutte le specifiche UI generate dalla macchina a stati.\n\n"
-    md += "---\n\n"
-    
-    # Tabella indice
-    md += "## 📋 Elenco Stati UI\n\n"
-    md += "| # | Stato | File | Tipo | Descrizione |\n"
-    md += "|---|-------|------|------|-------------|\n"
-    
-    idx = 1
-    for state_name in states:
-        is_transient = state_name in TRANSIENT_STATES
-        state_type = "⏳ Transitorio" if is_transient else "🖥️ Schermata"
-        filename = f"UI_{state_name}.md"
-        filepath = f"[{filename}]({filename})"
-        
-        description = get_state_description(state_name, states[state_name], "")
-        # Trunca descrizione per la tabella
-        if len(description) > 60:
-            description = description[:57] + "..."
-        
-        md += f"| {idx} | `{state_name}` | {filepath} | {state_type} | {description} |\n"
-        idx += 1
-    
-    md += "\n---\n\n"
-    
-    # Diagramma di flusso (PlantUML)
-    md += "## 🗺️ Diagramma di Flusso\n\n"
-    md += "```plantuml\n"
-    md += "@startuml\n"
-    md += "skinparam state {\n"
-    md += "  BackgroundColor #E8F5E9\n"
-    md += "  BorderColor #2E7D32\n"
-    md += "  ArrowColor #1B5E20\n"
-    md += "}\n\n"
+def generate_plantuml(machine: dict) -> str:
+    """Genera il codice PlantUML dalla macchina a stati."""
+    uml = "@startuml\n"
+    uml += "skinparam state {\n"
+    uml += "  BackgroundColor #E8F5E9\n"
+    uml += "  BorderColor #2E7D32\n"
+    uml += "  ArrowColor #1B5E20\n"
+    uml += "}\n\n"
     
     initial = machine.get("initial", "")
     if initial:
-        md += f"  [*] --> {initial}\n"
+        uml += f"  [*] --> {initial}\n"
     
-    for state_name, state_def in states.items():
+    for state_name, state_def in machine.get("states", {}).items():
         transitions = state_def.get("on", {})
         for event, dest in transitions.items():
-            md += f"  {state_name} --> {dest} : {event}\n"
+            uml += f"  {state_name} --> {dest} : {event}\n"
     
-    md += "@enduml\n"
-    md += "```\n\n"
-    md += "---\n\n"
-    
-    # Come usare
-    md += "## 🚀 Come Usare Questi File\n\n"
-    md += "1. **Scegli lo stato** che ti interessa dalla tabella sopra\n"
-    md += "2. **Apri il file** `.md` corrispondente\n"
-    md += "3. **Copia il contenuto** del file\n"
-    md += "4. **Incollalo** nel tuo strumento UI preferito:\n"
-    md += "   - [v0.dev](https://v0.dev) → UI React/Tailwind\n"
-    md += "   - [Claude Artifacts](https://claude.ai) → Componenti con logica\n"
-    md += "   - [Bolt.new](https://bolt.new) → App complete\n"
-    md += "   - [Lovable](https://lovable.dev) → UI moderne\n"
-    md += "   - Figma AI → Design\n"
-    md += "   - Oppure semplicemente consegnalo a uno sviluppatore\n"
-    md += "5. **Itera** sulla UI usando le interazioni descritte nel file\n\n"
-    md += "---\n\n"
-    
-    # Flussi principali
-    md += "## 🔄 Flussi Principali\n\n"
-    
-    # Identifica il flusso principale (catena dagli stati non transitori)
-    md += "### Flusso di Autenticazione\n\n"
-    auth_flow = []
-    for state_name in ["app_idle", "iniziale", "caricamento", "successo", "errore", "sessione_scaduta"]:
-        if state_name in states:
-            auth_flow.append(state_name)
-    md += " → ".join([f"`{s}`" for s in auth_flow]) + "\n\n"
-    
-    md += "### Flusso di Caricamento Dati\n\n"
-    load_flow = []
-    for state_name in ["iniziale", "caricamento", "successo", "vuoto", "errore"]:
-        if state_name in states:
-            load_flow.append(state_name)
-    md += " → ".join([f"`{s}`" for s in load_flow]) + "\n\n"
-    
-    return md
+    uml += "@enduml"
+    return uml
 
 
 def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description="Genera specifiche UI dalla macchina a stati")
+    parser = argparse.ArgumentParser(description="Genera specifiche UI dinamicamente con LLM")
     parser.add_argument("--machine", default="output/spec/spec_machine.json", help="Percorso spec_machine.json")
     parser.add_argument("--context", default="output/context/project_context.md", help="Percorso project_context.md")
+    parser.add_argument("--spec", default="output/spec/spec.md", help="Percorso spec.md")
     parser.add_argument("--output-dir", default="output/ui_specs", help="Directory di output")
+    parser.add_argument("--provider", choices=["openai", "anthropic", "ollama"], default=LLM_PROVIDER, help="Provider LLM")
+    parser.add_argument("--model", default=LLM_MODEL, help="Modello LLM")
+    parser.add_argument("--api-key", default=LLM_API_KEY, help="API Key LLM")
+    parser.add_argument("--base-url", default=LLM_BASE_URL, help="Base URL LLM (per Ollama)")
+    parser.add_argument("--states-only", action="store_true", help="Genera solo gli stati")
+    parser.add_argument("--screens-only", action="store_true", help="Genera solo le schermate")
     args = parser.parse_args()
     
+    # Aggiorna configurazione globale
+    global LLM_PROVIDER, LLM_MODEL, LLM_API_KEY, LLM_BASE_URL
+    LLM_PROVIDER = args.provider
+    LLM_MODEL = args.model
+    LLM_API_KEY = args.api_key or LLM_API_KEY
+    LLM_BASE_URL = args.base_url or LLM_BASE_URL
+    
+    if not LLM_API_KEY and LLM_PROVIDER != "ollama":
+        print("❌ Imposta LLM_API_KEY o OPENAI_API_KEY")
+        sys.exit(1)
+    
+    print(f"🤖 LLM Provider: {LLM_PROVIDER}")
+    print(f"🧠 LLM Model: {LLM_MODEL}")
+    
     # Carica input
-    print(f"📦 Caricamento macchina a stati: {args.machine}")
+    print(f"\n📦 Caricamento macchina a stati: {args.machine}")
     machine = load_machine(args.machine)
     
     print(f"📖 Caricamento contesto: {args.context}")
     context = load_context(args.context)
     
+    print(f"📄 Caricamento specifica: {args.spec}")
+    spec = load_spec(args.spec)
+    
     states = machine.get("states", {})
     print(f"🔍 Trovati {len(states)} stati nella macchina")
     
     # Crea directory output
-    os.makedirs(args.output_dir, exist_ok=True)
+    states_dir = os.path.join(args.output_dir, "states")
+    screens_dir = os.path.join(args.output_dir, "screens")
+    os.makedirs(states_dir, exist_ok=True)
+    os.makedirs(screens_dir, exist_ok=True)
     
-    # Genera UI spec per ogni stato
-    generated = 0
-    for state_name, state_def in states.items():
-        is_transient = state_name in TRANSIENT_STATES
-        prefix = "⏳" if is_transient else "🖥️"
+    # Definizione schermate e stati correlati (dinamica, non hard-coded)
+    # Il LLM determinerà quali schermate generare basandosi sul contesto
+    screen_definitions = [
+        ("01_login", ["app_idle", "authenticating", "sessione_scaduta", "iniziale", "errore"]),
+        ("02_dashboard", ["successo", "caricamento", "vuoto", "errore"]),
+        ("03_catalogo", ["successo", "caricamento", "vuoto", "errore"]),
+        ("04_offerte", ["successo", "caricamento", "vuoto", "errore"]),
+        ("05_alert", ["successo", "caricamento", "vuoto", "errore"]),
+        ("06_confronti", ["successo", "caricamento", "vuoto", "errore"]),
+    ]
+    
+    generated_states = []
+    generated_screens = []
+    
+    # Genera stati (Livello 2)
+    if not args.screens_only:
+        print(f"\n🏗️  Generazione stati macchina (Livello 2)...")
+        for state_name, state_def in states.items():
+            print(f"  🔄 Generando UI spec per '{state_name}'...")
+            
+            try:
+                md_content = generate_state_spec_llm(state_name, state_def, machine, context, spec)
+                output_path = os.path.join(states_dir, f"UI_{state_name}.md")
+                
+                with open(output_path, "w") as f:
+                    f.write(md_content)
+                
+                generated_states.append(state_name)
+                print(f"    ✅ Scritto: {output_path}")
+            except Exception as e:
+                print(f"    ❌ Errore generando '{state_name}': {e}")
+            
+            # Rate limiting
+            time.sleep(1)
+    
+    # Genera schermate (Livello 1)
+    if not args.states_only:
+        print(f"\n🖥️  Generazione schermate reali (Livello 1)...")
+        for screen_name, related_states in screen_definitions:
+            print(f"  🔄 Generando schermata '{screen_name}'...")
+            
+            try:
+                md_content = generate_screen_spec_llm(screen_name, related_states, machine, context, spec)
+                output_path = os.path.join(screens_dir, f"{screen_name}.md")
+                
+                with open(output_path, "w") as f:
+                    f.write(md_content)
+                
+                generated_screens.append(screen_name)
+                print(f"    ✅ Scritto: {output_path}")
+            except Exception as e:
+                print(f"    ❌ Errore generando '{screen_name}': {e}")
+            
+            # Rate limiting
+            time.sleep(1)
+    
+    # Genera README
+    print(f"\n📋 Generando README.md...")
+    try:
+        readme_content = generate_index_llm(states, generated_screens, machine)
+        # Aggiungi il diagramma PlantUML
+        plantuml = generate_plantuml(machine)
+        readme_content += f"\n\n## Diagramma di Flusso (PlantUML)\n\n```plantuml\n{plantuml}\n```\n"
         
-        print(f"  {prefix} Generando UI spec per '{state_name}'...")
+        readme_path = os.path.join(args.output_dir, "README.md")
+        with open(readme_path, "w") as f:
+            f.write(readme_content)
         
-        md_content = generate_ui_spec(state_name, state_def, machine, context)
-        output_path = os.path.join(args.output_dir, f"UI_{state_name}.md")
-        
-        with open(output_path, "w") as f:
-            f.write(md_content)
-        
-        generated += 1
-        print(f"    ✅ Scritto: {output_path}")
+        print(f"  ✅ Scritto: {readme_path}")
+    except Exception as e:
+        print(f"  ❌ Errore generando README: {e}")
     
-    # Genera indice
-    print(f"\n📋 Generando indice...")
-    index_content = generate_index(states, machine, args.output_dir)
-    index_path = os.path.join(args.output_dir, "README.md")
-    
-    with open(index_path, "w") as f:
-        f.write(index_content)
-    
-    print(f"  ✅ Scritto: {index_path}")
-    
-    print(f"\n🎉 Completato! {generated} UI specs generate in {args.output_dir}/")
-    print(f"   Apri {index_path} per navigare tra tutte le specifiche.")
+    print(f"\n🎉 Completato!")
+    print(f"   {len(generated_states)} stati generati in {states_dir}/")
+    print(f"   {len(generated_screens)} schermate generate in {screens_dir}/")
+    print(f"   README in {args.output_dir}/README.md")
 
 
 if __name__ == "__main__":

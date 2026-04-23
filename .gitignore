@@ -34,7 +34,7 @@ output/fuzz_report.json
 output/critic_feedback.json
 output/completeness_report.json
 output/loop_checkpoints/
-
+output/ui_specs/
 # Legacy generated files (from old runs)
 project_context.md
 spec.md
