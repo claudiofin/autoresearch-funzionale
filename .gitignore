@@ -35,3 +35,8 @@ output/analyst_suggestions.json
 output/project_context.md
 output/loop_checkpoints/
 output/completeness_report.json
+
+# Generated files at root (from old runs)
+project_context.md
+spec.md
+spec_machine.json
