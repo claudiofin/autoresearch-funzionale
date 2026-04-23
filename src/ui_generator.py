@@ -40,6 +40,83 @@ def load_spec(path: str) -> str:
         return f.read()
 
 
+def load_design(path: str) -> str:
+    """Loads the Design System from DESIGN.md file, if it exists."""
+    try:
+        with open(path, "r") as f:
+            return f.read()
+    except FileNotFoundError:
+        print(f"⚠️  File {path} not found. Proceeding without Design System.")
+        return ""
+
+
+def generate_design_system_llm(context: str) -> str:
+    """Generates a properly formatted DESIGN.md file from the project context."""
+    
+    prompt = f"""You are a Lead UI/UX Designer. You must create a Design System based on the product context.
+
+## Project Context
+{context[:4000]}
+
+## Instructions
+Generate a complete `DESIGN.md` file. The file must RIGOROUSLY follow this format:
+1. A YAML block at the top enclosed between `---` with design tokens.
+2. A Markdown section below the YAML block explaining the visual philosophy.
+
+Choose colors, fonts, and spacing that fit PERFECTLY the sector and audience of the project (e.g., B2B, consumer, medical, playful, etc.).
+
+Use this exact schema for YAML:
+---
+version: "alpha"
+name: "System Name"
+colors:
+  primary: "#..."
+  secondary: "#..."
+  tertiary: "#..."
+  neutral: "#..."
+  surface: "#..."
+  text-main: "#..."
+typography:
+  h1:
+    fontFamily: "..."
+    fontSize: "..."
+    fontWeight: "..."
+  body:
+    fontFamily: "..."
+    fontSize: "..."
+    fontWeight: "..."
+rounded:
+  sm: "..."
+  md: "..."
+spacing:
+  sm: "..."
+  md: "..."
+components:
+  button-primary:
+    backgroundColor: "{{{{colors.primary}}}}"
+    textColor: "#ffffff"
+    rounded: "{{{{rounded.md}}}}"
+---
+
+Respond ONLY with the file content (YAML + Markdown), without introducing with phrases like "Here is the file".
+"""
+
+    system_prompt = "You are a Design Systems Architect. You generate DESIGN.md files with precise tokens."
+    
+    try:
+        response = call_llm(prompt, system_prompt, max_tokens=2048)
+        # Clean up any markdown blocks if the LLM adds them
+        response = response.strip()
+        if response.startswith("```markdown"):
+            response = response[11:]
+        if response.endswith("```"):
+            response = response[:-3]
+        return response.strip()
+    except Exception as e:
+        print(f"  ⚠️  Error generating Design System: {e}")
+        return ""
+
+
 def call_llm(prompt: str, system_prompt: str = "", max_tokens: int = 4096) -> str:
     """Calls the configured LLM and returns the response."""
     if LLM_PROVIDER == "openai":
@@ -124,7 +201,7 @@ def _call_ollama(prompt: str, system_prompt: str, max_tokens: int) -> str:
         sys.exit(1)
 
 
-def generate_state_spec_llm(state_name: str, state_def: dict, machine: dict, context: str, spec: str) -> str:
+def generate_state_spec_llm(state_name: str, state_def: dict, machine: dict, context: str, spec: str, design_system: str = "") -> str:
     """Generates UI spec for a state using the LLM."""
     
     states_info = json.dumps({state_name: state_def}, indent=2)
@@ -139,6 +216,19 @@ def generate_state_spec_llm(state_name: str, state_def: dict, machine: dict, con
             for event, dest in transitions.items():
                 related.append(f"- To {dest} via event {event}")
     
+    # Design System instructions
+    design_instructions = ""
+    if design_system:
+        design_instructions = f"""
+## Design System (RIGID VISUAL RULES)
+```markdown
+{design_system}
+```
+CRITICAL INSTRUCTION: When listing "UI Components" and "UI Notes", you MUST use exclusively the design tokens (colors, spacing, typography, rounded, components) defined above.
+Do NOT invent generic classes (e.g., do NOT say 'use a bg-blue-500', but use the color `{colors.primary}`).
+Reference component variants like `button-primary`, `button-success` etc. as defined in the components section.
+"""
+    
     prompt = f"""You are a Senior Product Manager and UI/UX Designer. Analyze the state machine state and generate a complete UI specification.
 
 ## Project Context
@@ -147,6 +237,7 @@ def generate_state_spec_llm(state_name: str, state_def: dict, machine: dict, con
 ## Functional Specification
 {spec[:2000]}
 
+{design_instructions}
 ## State to Analyze
 ```json
 {states_info}
@@ -165,15 +256,16 @@ Generate a complete Markdown file for state '{state_name}' that includes:
 1. **Description** — What this screen/state shows to the user
 2. **Context** — Where you come from and where you can go
 3. **Required Data** — Table with fields, types, and descriptions (based on project context)
-4. **UI Components** — List of visual components with type, elements, and interactions, clearly specifying the XSTATE MAPPING (e.g., "Continue" Button mapped to EVENT_X)
+4. **UI Components** — List of visual components with type, elements, and interactions, clearly specifying the XSTATE MAPPING (e.g., "Continue" Button mapped to EVENT_X). Use design tokens from the Design System section.
 5. **Constraints and Rules** — Business rules and technical constraints
-6. **UI Notes** — Layout, colors, animations, patterns
+6. **UI Notes** — Layout, colors, animations, patterns. Reference design tokens explicitly.
 7. **User Flow** — Textual flow diagram
 
 IMPORTANT:
 - Be specific and concrete, based on the real project context
 - Generate realistic mock data
 - The file must be ready to be used by an AI UI generator (like v0 or Claude).
+- When describing visual elements, ALWAYS reference the design tokens from the Design System section.
 """
 
     system_prompt = "You are a UI/UX specification expert. You generate detailed technical documentation ready for implementation."
@@ -236,10 +328,22 @@ Do not add markdown like ```json, just print the array.
         ]
 
 
-def generate_screen_spec_llm(screen_name: str, related_states: list, machine: dict, context: str, spec: str) -> str:
+def generate_screen_spec_llm(screen_name: str, related_states: list, machine: dict, context: str, spec: str, design_system: str = "") -> str:
     """Generates UI spec for a real screen using the LLM."""
     
     states_info = {state_name: machine["states"][state_name] for state_name in related_states if state_name in machine.get("states", {})}
+    
+    # Design System instructions
+    design_instructions = ""
+    if design_system:
+        design_instructions = f"""
+## Design System (RIGID VISUAL RULES)
+```markdown
+{design_system}
+```
+CRITICAL INSTRUCTION: When listing "UI Components" and "Notes for AI Generators", you MUST use exclusively the design tokens (colors, spacing, typography, rounded, components) defined above.
+Do NOT invent generic classes. Reference component variants like `button-primary`, `button-success` etc. as defined in the components section.
+"""
     
     prompt = f"""You are a Senior Product Manager and UI/UX Designer. Analyze these states and generate a complete UI specification for the final screen.
 
@@ -249,6 +353,7 @@ def generate_screen_spec_llm(screen_name: str, related_states: list, machine: di
 ## Screen to Generate
 {screen_name}
 
+{design_instructions}
 ## Related Machine States
 ```json
 {json.dumps(states_info, indent=2)}
@@ -258,9 +363,9 @@ def generate_screen_spec_llm(screen_name: str, related_states: list, machine: di
 Generate a complete Markdown file for screen '{screen_name}' that includes:
 1. **Description and Context**
 2. **Required Data** — Realistic mock data.
-3. **UI Components** — Component list. RIGIDLY map each button/action to the corresponding XState event.
+3. **UI Components** — Component list. RIGIDLY map each button/action to the corresponding XState event. Use design tokens from the Design System section.
 4. **UI States** — How the screen appears during loading, error, or empty states, based on the related states provided.
-5. **Notes for AI Generators (v0 / Claude)** — Specific style instructions (Tailwind, Shadcn).
+5. **Notes for AI Generators (v0 / Claude)** — Specific style instructions. Reference design tokens explicitly (e.g., "Use {colors.primary} for primary actions").
 
 The file must be ready for copy-paste into v0.dev.
 """
@@ -330,6 +435,8 @@ def main():
     parser.add_argument("--base-url", default=LLM_BASE_URL, help="LLM Base URL")
     parser.add_argument("--states-only", action="store_true", help="Generate only states")
     parser.add_argument("--screens-only", action="store_true", help="Generate only screens")
+    parser.add_argument("--design", default="DESIGN.md", help="Path to Design System file")
+    parser.add_argument("--force-design", action="store_true", help="Force regeneration of DESIGN.md even if it exists")
     args = parser.parse_args()
     
     global LLM_PROVIDER, LLM_MODEL, LLM_API_KEY, LLM_BASE_URL
@@ -344,12 +451,31 @@ def main():
     
     print(f"🤖 Configuration: Provider={LLM_PROVIDER} | Model={LLM_MODEL}")
     
+    # Load context first (needed for design system generation)
+    context = load_context(args.context)
+    
+    # Design System: load or generate
+    print(f"🎨 Design System configuration...")
+    if os.path.exists(args.design) and not args.force_design:
+        print(f"  ✅ Found existing file: {args.design}. Using it to preserve your modifications.")
+        design_system = load_design(args.design)
+    else:
+        reason = "File not found" if not os.path.exists(args.design) else "Forced regeneration requested (--force-design)"
+        print(f"  ✨ {reason}. Dynamically generating a new Design System from context...")
+        design_system = generate_design_system_llm(context)
+        
+        if design_system:
+            with open(args.design, "w") as f:
+                f.write(design_system)
+            print(f"  💾 New Design System generated and saved to {args.design}!")
+        else:
+            print("  ⚠️  Generation failed, proceeding without Design System.")
+    
     # CORRECT ARRAY INITIALIZATION
     generated_states = []
     generated_screens = []
     
     machine = load_machine(args.machine)
-    context = load_context(args.context)
     spec = load_spec(args.spec)
     states = machine.get("states", {})
     
@@ -363,7 +489,7 @@ def main():
         for state_name, state_def in states.items():
             print(f"  🔄 Generating UI spec for '{state_name}'...")
             try:
-                md_content = generate_state_spec_llm(state_name, state_def, machine, context, spec)
+                md_content = generate_state_spec_llm(state_name, state_def, machine, context, spec, design_system)
                 output_path = os.path.join(states_dir, f"UI_{state_name}.md")
                 with open(output_path, "w") as f:
                     f.write(md_content)
@@ -381,7 +507,7 @@ def main():
             related_states = screen_def["states"]
             print(f"  🔄 Generating screen '{screen_name}'...")
             try:
-                md_content = generate_screen_spec_llm(screen_name, related_states, machine, context, spec)
+                md_content = generate_screen_spec_llm(screen_name, related_states, machine, context, spec, design_system)
                 output_path = os.path.join(screens_dir, f"{screen_name}.md")
                 with open(output_path, "w") as f:
                     f.write(md_content)

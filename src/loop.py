@@ -57,7 +57,8 @@ class AutonomousLoop:
         checkpoint_dir: str = DEFAULT_CHECKPOINT_DIR,
         force_iterations: bool = FORCE_ALL_ITERATIONS,
         input_dir: str = None,
-        generate_ui: bool = False
+        generate_ui: bool = False,
+        force_design: bool = False
     ):
         self.max_iterations = max_iterations
         self.time_budget = time_budget
@@ -65,6 +66,7 @@ class AutonomousLoop:
         self.force_iterations = force_iterations
         self.input_dir = input_dir  # If provided, runs ingest at start
         self.generate_ui = generate_ui  # If True, generates UI specs at end
+        self.force_design = force_design  # If True, forces DESIGN.md regeneration
         
         # Output files (organized in subfolders)
         if input_dir:
@@ -507,11 +509,19 @@ class AutonomousLoop:
             script = os.path.join(SCRIPT_DIR, "ui_generator.py")
             ui_output_dir = os.path.join(OUTPUT_DIR, "ui_specs")
             
+            cmd = [
+                "python3", script, 
+                "--machine", self.spec_machine,
+                "--context", self.context_file,
+                "--output-dir", ui_output_dir
+            ]
+            
+            # Pass force_design flag if set
+            if self.force_design:
+                cmd.append("--force-design")
+            
             result = subprocess.run(
-                ["python3", script, 
-                 "--machine", self.spec_machine,
-                 "--context", self.context_file,
-                 "--output-dir", ui_output_dir],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=120,
@@ -656,6 +666,8 @@ def main():
                         help="Force all iterations even without critical errors")
     parser.add_argument("--generate-ui", action="store_true",
                         help="Generate UI specs from state machine (at end of loop)")
+    parser.add_argument("--force-design", action="store_true",
+                        help="Force regeneration of DESIGN.md even if it exists")
     args = parser.parse_args()
     
     # If input-dir is provided, context doesn't need to exist yet
@@ -678,7 +690,8 @@ def main():
         checkpoint_dir=args.checkpoint_dir,
         force_iterations=args.force,
         input_dir=args.input_dir,
-        generate_ui=args.generate_ui
+        generate_ui=args.generate_ui,
+        force_design=args.force_design
     )
     
     report = loop.run()

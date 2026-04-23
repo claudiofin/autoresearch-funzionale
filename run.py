@@ -27,6 +27,8 @@ def main():
     loop_parser.add_argument("--max-iterations", type=int, default=10)
     loop_parser.add_argument("--time-budget", type=int, default=1200)
     loop_parser.add_argument("--force", action="store_true")
+    loop_parser.add_argument("--force-design", action="store_true",
+                             help="Force regeneration of DESIGN.md even if it exists")
     
     # completeness command
     comp_parser = subparsers.add_parser("completeness", help="Check completeness")
@@ -81,6 +83,8 @@ def main():
             sys.argv.append("--force")
         if args.input_dir:
             sys.argv.extend(["--input-dir", args.input_dir])
+        if args.force_design:
+            sys.argv.append("--force-design")
         loop_main()
     
     elif args.command == "completeness":

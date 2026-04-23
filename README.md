@@ -129,6 +129,50 @@ export LLM_MODEL="your-model"
 
 ## Output
 
+### Design System (DESIGN.md)
+
+The system supports the [DESIGN.md](https://github.com/google-labs-code/design.md) format from Google Labs for defining visual design tokens. This ensures consistent UI generation across all screens.
+
+**How it works:**
+- **First run**: If `DESIGN.md` doesn't exist, the LLM generates it from the project context (colors, fonts, spacing, components)
+- **Subsequent runs**: The existing `DESIGN.md` is used (preserves your manual modifications)
+- **Force regeneration**: Use `--force-design` to regenerate when you change the project context
+
+```bash
+# Generate DESIGN.md from context (first time)
+python run.py loop --input-dir inputs/ --generate-ui
+
+# Use existing DESIGN.md (preserves your changes)
+python run.py loop --context output/context/project_context.md --generate-ui
+
+# Force regeneration (when context changed significantly)
+python run.py loop --context output/context/project_context.md --generate-ui --force-design
+```
+
+**DESIGN.md structure:**
+```markdown
+---
+version: "alpha"
+name: "My Design System"
+colors:
+  primary: "#0ea5e9"
+  secondary: "#64748b"
+  tertiary: "#10b981"
+  neutral: "#f8fafc"
+typography:
+  h1:
+    fontFamily: "Inter"
+    fontSize: "2.25rem"
+components:
+  button-primary:
+    backgroundColor: "{colors.primary}"
+    textColor: "#ffffff"
+---
+
+## Overview
+Design philosophy and visual guidelines...
+```
+
 ### UI Specifications (output/ui_specs/)
 
 After generating the state machine, you can use `ui_generator.py` to create **Markdown Blueprints** ready to be used with AI UI generators:
@@ -143,6 +187,9 @@ python3 src/ui_generator.py --provider ollama --model llama3
 # States only or screens only
 python3 src/ui_generator.py --states-only
 python3 src/ui_generator.py --screens-only
+
+# Force DESIGN.md regeneration
+python3 src/ui_generator.py --force-design
 ```
 
 #### What it generates
