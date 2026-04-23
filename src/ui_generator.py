@@ -539,6 +539,9 @@ def main():
     # Load context first (needed for design system generation)
     context = load_context(args.context)
     
+    # Ensure output directory exists
+    os.makedirs(args.output_dir, exist_ok=True)
+    
     # Design System: load or generate
     print(f"🎨 Design System configuration...")
     if os.path.exists(args.design) and not args.force_design:

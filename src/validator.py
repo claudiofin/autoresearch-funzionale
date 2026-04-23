@@ -212,8 +212,7 @@ def validate_machine(machine_file: str) -> dict:
     issues_count = (
         len(results["dead_end_states"]) +
         len(results["unreachable_states"]) +
-        len(results["invalid_transitions"]) +
-        len(results["potential_loops"])
+        len(results["invalid_transitions"])
     )
     
     total_states = results["total_states"]

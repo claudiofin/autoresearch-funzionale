@@ -353,6 +353,39 @@ Rules:
 13. All states must be reachable from app_idle
 14. HIERARCHICAL STATES: The "success" state MUST be hierarchical (nested). Analyze the project context and create a sub-state for each main area/screen of the app (e.g., for e-commerce: catalog, cart, profile; for some app: dashboard, catalog, offers, benchmark, groups). Each sub-state should have navigation events to other sub-states (e.g., NAVIGATE_CATALOGO, NAVIGATE_OFFERTE). This allows the UI generator to create separate screen files for each area.
 
+CRITICAL - DO NOT USE THESE REDUNDANT EVENTS (use the consolidated alternatives):
+- ❌ DATA_LOADED, DATA_FETCHED → ✅ ON_SUCCESS (with guard "hasData")
+- ❌ FETCH_ERROR, FETCH_FAILED, TIMEOUT, TIMEOUT_FETCH, ERROR → ✅ ON_ERROR
+- ❌ CANCEL_FETCH → ✅ CANCEL (with guard "hasPreviousState")
+- ❌ RETRY (without guard) → ✅ RETRY_FETCH with cond "canRetry"
+
+EXAMPLE - loading state transitions (follow this pattern):
+{
+  "loading": {
+    "entry": ["start_timeout_timer", "show_loading_indicator"],
+    "exit": ["stop_timeout_timer", "hide_loading_indicator"],
+    "on": {
+      "ON_SUCCESS": { "target": "success", "cond": "hasData" },
+      "ON_SUCCESS": { "target": "empty", "cond": "!hasData" },
+      "ON_ERROR": "error",
+      "CANCEL": { "target": "success", "cond": "hasPreviousState" },
+      "CANCEL": { "target": "app_idle", "cond": "!hasPreviousState" }
+    }
+  }
+}
+
+EXAMPLE - error state transitions (follow this pattern):
+{
+  "error": {
+    "entry": ["log_error", "show_error_message"],
+    "exit": ["hide_error_message"],
+    "on": {
+      "RETRY_FETCH": { "target": "loading", "cond": "canRetry", "actions": ["incrementRetryCount"] },
+      "CANCEL": "app_idle"
+    }
+  }
+}
+
 TRANSITION FORMAT:
 - Simple: EVENT -> target_state
 - With guard: EVENT with cond guardName -> target_state
@@ -417,6 +450,77 @@ TRANSITION FORMAT:
     
     print("❌ ERROR: All LLM attempts failed.")
     sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Post-Processing: Clean Unreachable States
+# ---------------------------------------------------------------------------
+
+def _clean_unreachable_states(machine: dict) -> dict:
+    """Remove unreachable states and XState keywords used as state names.
+    
+    The LLM sometimes generates states like 'initial' (which is an XState keyword)
+    or states that have no path from the initial state. This function cleans them up.
+    """
+    initial_state = machine.get("initial", "app_idle")
+    all_states = machine.get("states", {})
+    
+    # XState reserved keywords that should never be state names
+    XSTATE_KEYWORDS = {"initial", "states", "on", "entry", "exit", "context", "id", "type", "invoke", "activities"}
+    
+    # Remove XState keyword states
+    for keyword in XSTATE_KEYWORDS:
+        if keyword in all_states and keyword != initial_state:
+            print(f"  🧹 Removing XState keyword state: '{keyword}'")
+            del all_states[keyword]
+    
+    # BFS to find all reachable states from initial state
+    reachable = set()
+    queue = [initial_state]
+    reachable.add(initial_state)
+    
+    while queue:
+        current = queue.pop(0)
+        if current not in all_states:
+            continue
+        state_config = all_states[current]
+        
+        # Check transitions
+        for event, target in state_config.get("on", {}).items():
+            if isinstance(target, str):
+                target_name = target.lstrip('.')
+                if target_name in all_states and target_name not in reachable:
+                    reachable.add(target_name)
+                    queue.append(target_name)
+            elif isinstance(target, dict):
+                target_name = target.get("target", "").lstrip('.')
+                if target_name in all_states and target_name not in reachable:
+                    reachable.add(target_name)
+                    queue.append(target_name)
+            elif isinstance(target, list):
+                for t in target:
+                    if isinstance(t, dict):
+                        target_name = t.get("target", "").lstrip('.')
+                    else:
+                        target_name = str(t).lstrip('.')
+                    if target_name in all_states and target_name not in reachable:
+                        reachable.add(target_name)
+                        queue.append(target_name)
+        
+        # Check sub-states
+        sub_states = state_config.get("states", {})
+        for sub_name in sub_states:
+            if sub_name not in reachable:
+                reachable.add(sub_name)
+                queue.append(sub_name)
+    
+    # Remove unreachable states
+    unreachable = set(all_states.keys()) - reachable
+    for state_name in unreachable:
+        print(f"  🧹 Removing unreachable state: '{state_name}'")
+        del all_states[state_name]
+    
+    return machine
 
 
 # ---------------------------------------------------------------------------
@@ -521,16 +625,29 @@ def run_analysis(context_file: str, output_file: str, time_budget: int,
             guard = trans.get("guard") or trans.get("cond")
             actions = trans.get("actions", [])
             
-            if from_state in machine["states"]:
+            # Resolve dot notation (e.g., success.dashboard -> parent='success', child='dashboard')
+            target_dict = machine["states"]
+            resolved_from = from_state
+            if "." in from_state:
+                parts = from_state.split(".")
+                parent = parts[0]
+                child = parts[1]
+                if parent in machine["states"] and "states" in machine["states"][parent] and child in machine["states"][parent]["states"]:
+                    target_dict = machine["states"][parent]["states"]
+                    resolved_from = child
+                    if not to_state.startswith("."): # Make destination relative if not already
+                         to_state = f".{to_state}" if not "." in to_state else to_state
+            
+            if resolved_from in target_dict:
                 if guard or actions:
                     transition = {"target": to_state}
                     if guard:
                         transition["cond"] = guard
                     if actions:
                         transition["actions"] = actions
-                    machine["states"][from_state]["on"][event] = transition
+                    target_dict[resolved_from]["on"][event] = transition
                 else:
-                    machine["states"][from_state]["on"][event] = to_state
+                    target_dict[resolved_from]["on"][event] = to_state
     
     # Merge with existing machine (if any)
     if existing_machine:
@@ -541,6 +658,11 @@ def run_analysis(context_file: str, output_file: str, time_budget: int,
         # Add new states from LLM suggestions
         for state in llm_data.get("states", []):
             state_name = state["name"]
+            
+            # Ignore dot-notation clones generated by LLM (e.g. success.dashboard) because they belong inside 'success'
+            if "." in state_name:
+                continue
+                
             if state_name not in machine["states"]:
                 machine["states"][state_name] = _build_state_config(state)
             else:
@@ -587,6 +709,9 @@ def run_analysis(context_file: str, output_file: str, time_budget: int,
     # Fix: ensure app_idle exists
     if "app_idle" not in machine["states"]:
         machine["states"]["app_idle"] = {"entry": [], "exit": [], "on": {}}
+    
+    # Post-processing: remove unreachable states and XState keywords used as state names
+    machine = _clean_unreachable_states(machine)
     
     print(f"Generated state machine: {len(machine['states'])} states")
     

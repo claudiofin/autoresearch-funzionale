@@ -67,7 +67,7 @@ DEFAULT_TIMEOUT_SECONDS = 300
 
 SPEC_FILE = "output/spec/spec.md"
 MACHINE_FILE = "output/spec/spec_machine.json"
-FUZZ_REPORT_FILE = "output/fuzz_report.json"
-CRITIC_FEEDBACK_FILE = "output/critic_feedback.json"
+FUZZ_REPORT_FILE = "output/spec/fuzz_report.json"
+CRITIC_FEEDBACK_FILE = "output/spec/critic_report.json"
 ANALYST_OUTPUT_FILE = "output/analyst/analyst_suggestions.json"
 PROJECT_CONTEXT_FILE = "output/context/project_context.md"

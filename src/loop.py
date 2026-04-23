@@ -78,9 +78,8 @@ class AutonomousLoop:
         self.analyst_output = os.path.join(ANALYST_DIR, "analyst_suggestions.json")
         self.spec_output = os.path.join(SPEC_DIR, "spec.md")
         self.spec_machine = os.path.join(SPEC_DIR, "spec_machine.json")
-        self.fuzz_report = os.path.join(OUTPUT_DIR, "fuzz_report.json")
-        self.critic_feedback = os.path.join(OUTPUT_DIR, "critic_feedback.json")
-
+        self.fuzz_report = os.path.join(SPEC_DIR, "fuzz_report.json")
+        self.critic_feedback = os.path.join(SPEC_DIR, "critic_report.json")
         
         # State
         self.iteration = 0
@@ -264,8 +263,7 @@ class AutonomousLoop:
                 # Check if there are structural issues from validator
                 has_structural_issues = (
                     validator_result.get("dead_end_count", 0) > 0 or
-                    validator_result.get("unreachable_count", 0) > 0 or
-                    validator_result.get("cycle_count", 0) > 0
+                    validator_result.get("unreachable_count", 0) > 0
                 )
                 
                 critical_errors = critic_result.get("critical_issues", 0)
@@ -382,7 +380,7 @@ class AutonomousLoop:
                 args,
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=600,  # Increased from 300s - LLM calls can take 2-3 min
                 env=env
             )
             

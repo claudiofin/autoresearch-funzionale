@@ -352,8 +352,8 @@ def main():
     parser = argparse.ArgumentParser(description="Fuzz test for XState state machine")
     parser.add_argument("--machine", type=str, default="output/spec/spec_machine.json",
                         help="XState machine JSON file")
-    parser.add_argument("--output", type=str, default="output/fuzz_report.json",
-                        help="Output JSON report file (default: output/fuzz_report.json)")
+    parser.add_argument("--output", type=str, default="output/spec/fuzz_report.json",
+                        help="Output JSON report file (default: output/spec/fuzz_report.json)")
     parser.add_argument("--num-paths", type=int, default=100,
                         help="Number of random paths to simulate (default: 100)")
     parser.add_argument("--max-steps", type=int, default=50,
