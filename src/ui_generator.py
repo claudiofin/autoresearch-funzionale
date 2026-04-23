@@ -185,6 +185,75 @@ IMPORTANTE:
     return call_llm(prompt, system_prompt)
 
 
+def discover_screens_llm(machine: dict, context: str, spec: str) -> list:
+    """Usa il LLM per scoprire quali schermate generare basandosi sul contesto."""
+    
+    states_info = json.dumps(machine.get("states", {}), indent=2)
+    
+    prompt = f"""Sei un Senior Product Manager. Analizza il contesto del progetto e la macchina a stati per determinare quali schermate reali generare.
+
+## Contesto del Progetto
+{context[:3000]}
+
+## Specifica Funzionale
+{spec[:3000]}
+
+## Stati della Macchina
+```json
+{states_info}
+```
+
+## Istruzioni
+Identifica le schermate reali del prodotto basandoti sul contesto. Per ogni schermata, indica:
+1. Nome screen (es. "01_login", "02_dashboard")
+2. Quali stati della macchina sono correlati
+
+Rispondi SOLO con un JSON array nel formato:
+```json
+[
+  {{"name": "01_login", "states": ["app_idle", "authenticating", "sessione_scaduta"]}},
+  {{"name": "02_dashboard", "states": ["successo", "caricamento", "vuoto", "errore"]}}
+]
+```
+
+Non aggiungere altro testo, solo il JSON.
+"""
+    
+    system_prompt = "Sei un analista funzionale. Identifichi le schermate di un'app basandoti sul contesto e sulla macchina a stati. Rispondi solo con JSON."
+    
+    try:
+        response = call_llm(prompt, system_prompt, max_tokens=2048)
+        # Estrai il JSON dalla risposta
+        import re
+        json_match = re.search(r'\[.*\]', response, re.DOTALL)
+        if json_match:
+            screens = json.loads(json_match.group())
+            print(f"  🧠 LLM ha identificato {len(screens)} schermate:")
+            for s in screens:
+                print(f"     - {s['name']}: {', '.join(s['states'])}")
+            return screens
+        else:
+            print("  ⚠️  LLM non ha restituito JSON valido, uso default")
+            return [
+                {"name": "01_login", "states": ["app_idle", "authenticating", "sessione_scaduta", "iniziale", "errore"]},
+                {"name": "02_dashboard", "states": ["successo", "caricamento", "vuoto", "errore"]},
+                {"name": "03_catalogo", "states": ["successo", "caricamento", "vuoto", "errore"]},
+                {"name": "04_offerte", "states": ["successo", "caricamento", "vuoto", "errore"]},
+                {"name": "05_alert", "states": ["successo", "caricamento", "vuoto", "errore"]},
+                {"name": "06_confronti", "states": ["successo", "caricamento", "vuoto", "errore"]},
+            ]
+    except Exception as e:
+        print(f"  ⚠️  Errore discover_screens: {e}, uso default")
+        return [
+            {"name": "01_login", "states": ["app_idle", "authenticating", "sessione_scaduta", "iniziale", "errore"]},
+            {"name": "02_dashboard", "states": ["successo", "caricamento", "vuoto", "errore"]},
+            {"name": "03_catalogo", "states": ["successo", "caricamento", "vuoto", "errore"]},
+            {"name": "04_offerte", "states": ["successo", "caricamento", "vuoto", "errore"]},
+            {"name": "05_alert", "states": ["successo", "caricamento", "vuoto", "errore"]},
+            {"name": "06_confronti", "states": ["successo", "caricamento", "vuoto", "errore"]},
+        ]
+
+
 def generate_screen_spec_llm(screen_name: str, related_states: list, machine: dict, context: str, spec: str) -> str:
     """Genera UI spec per una schermata reale usando il LLM."""
     
@@ -343,17 +412,6 @@ def main():
     os.makedirs(states_dir, exist_ok=True)
     os.makedirs(screens_dir, exist_ok=True)
     
-    # Definizione schermate e stati correlati (dinamica, non hard-coded)
-    # Il LLM determinerà quali schermate generare basandosi sul contesto
-    screen_definitions = [
-        ("01_login", ["app_idle", "authenticating", "sessione_scaduta", "iniziale", "errore"]),
-        ("02_dashboard", ["successo", "caricamento", "vuoto", "errore"]),
-        ("03_catalogo", ["successo", "caricamento", "vuoto", "errore"]),
-        ("04_offerte", ["successo", "caricamento", "vuoto", "errore"]),
-        ("05_alert", ["successo", "caricamento", "vuoto", "errore"]),
-        ("06_confronti", ["successo", "caricamento", "vuoto", "errore"]),
-    ]
-    
     generated_states = []
     generated_screens = []
     
@@ -378,10 +436,15 @@ def main():
             # Rate limiting
             time.sleep(1)
     
-    # Genera schermate (Livello 1)
+    # Genera schermate (Livello 1) - SCOPerte dinamicamente dal LLM
     if not args.states_only:
+        print(f"\n🔍 Scoperta schermate tramite LLM...")
+        screen_definitions = discover_screens_llm(machine, context, spec)
+        
         print(f"\n🖥️  Generazione schermate reali (Livello 1)...")
-        for screen_name, related_states in screen_definitions:
+        for screen_def in screen_definitions:
+            screen_name = screen_def["name"]
+            related_states = screen_def["states"]
             print(f"  🔄 Generando schermata '{screen_name}'...")
             
             try:
