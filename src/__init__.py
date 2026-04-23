@@ -1,1 +1,1 @@
-"""Autoresearch - Analisi Funzionale Automatica"""
+"""Autoresearch - Automatic Functional Analysis"""

@@ -1,11 +1,11 @@
-# Dipendenze opzionali per autoresearch
-# Installa solo se ti servono queste funzionalità
+# Optional dependencies for autoresearch
+# Install only if you need these features
 
-# PDF support - per leggere file .pdf negli input
+# PDF support - for reading .pdf files in inputs
 pypdf>=3.0.0
 
-# DOCX support - per leggere file .docx negli input
+# DOCX support - for reading .docx files in inputs
 python-docx>=0.8.11
 
-# Instructor - per output strutturato più robusto (se supportato dal modello)
+# Instructor - for more robust structured output (if supported by the model)
 # instructor>=1.0.0

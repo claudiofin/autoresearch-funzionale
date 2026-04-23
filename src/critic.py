@@ -1,11 +1,11 @@
 """
-Critic - Agente di revisione per analisi funzionale automatica.
+Critic - Review agent for automatic functional analysis.
 
-Analizza i report del fuzzer, la specifica e il contesto del progetto per generare
-feedback strutturato che l'Analyst può usare per migliorare la specifica.
+Analyzes fuzzer reports, specification, and project context to generate
+structured feedback that the Analyst can use to improve the specification.
 
-Il Critic adotta un approccio "Red Team": cerca attivamente buchi logici,
-edge case non gestiti, decisioni UX ambigue e FLUSSI MANCANTI.
+The Critic adopts a "Red Team" approach: actively looks for logic holes,
+unhandled edge cases, ambiguous UX decisions, and MISSING FLOWS.
 
 Usage:
     python src/critic.py --fuzz-report output/fuzz_report.json --spec output/spec/spec.md --machine output/spec/spec_machine.json --context output/context/project_context.md
@@ -18,11 +18,11 @@ import argparse
 from datetime import datetime
 
 # ---------------------------------------------------------------------------
-# LLM Client (opzionale - se non disponibile, usa analisi statica)
+# LLM Client (optional - if not available, uses static analysis)
 # ---------------------------------------------------------------------------
 
 def get_llm_client():
-    """Crea client LLM. Returns None se LLM_API_KEY non è settato."""
+    """Create LLM client. Returns None if LLM_API_KEY is not set."""
     api_key = os.getenv("LLM_API_KEY", "")
     if not api_key:
         return None, None
@@ -49,19 +49,19 @@ def get_llm_client():
 
 
 def call_llm_critic(fuzz_report: dict, spec_text: str, machine: dict, context_text: str = "") -> dict:
-    """Chiama l'LLM per un'analisi critica approfondita.
+    """Call the LLM for in-depth critical analysis.
     
     Args:
-        fuzz_report: Report del fuzzer
-        spec_text: Testo della specifica
-        machine: Macchina a stati
-        context_text: Contesto del progetto (per rilevare flussi mancanti)
+        fuzz_report: Fuzzer report
+        spec_text: Specification text
+        machine: State machine
+        context_text: Project context (for detecting missing flows)
     """
     client, model = get_llm_client()
     if not client:
         return None
     
-    # Prepara il prompt
+    # Prepare the prompt
     fuzz_summary = json.dumps(fuzz_report.get("summary", {}), indent=2)
     bugs = json.dumps(fuzz_report.get("bugs", []), indent=2)
     
@@ -76,7 +76,7 @@ def call_llm_critic(fuzz_report: dict, spec_text: str, machine: dict, context_te
                 target_state = target
             transitions_list.append(f"{state_name} --{event}--> {target_state}")
     
-    # Costruisci il prompt con contesto opzionale
+    # Build the prompt with optional context
     context_section = ""
     if context_text:
         context_section = f"""
@@ -170,7 +170,7 @@ Be thorough. Look for:
         )
         
         content = response.choices[0].message.content.strip()
-        # Estrai JSON dal response
+        # Extract JSON from response
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
@@ -184,7 +184,7 @@ Be thorough. Look for:
 
 
 def static_critic_analysis(fuzz_report: dict, machine: dict) -> dict:
-    """Analisi critica statica (senza LLM)."""
+    """Static critical analysis (without LLM)."""
     
     critical_issues = []
     ux_decisions = []
@@ -194,7 +194,7 @@ def static_critic_analysis(fuzz_report: dict, machine: dict) -> dict:
     summary = fuzz_report.get("summary", {})
     bugs = fuzz_report.get("bugs", [])
     
-    # Analizza dead-end states
+    # Analyze dead-end states
     dead_end_bugs = [b for b in bugs if b.get("type") == "dead_end_state"]
     for bug in dead_end_bugs:
         critical_issues.append({
@@ -206,7 +206,7 @@ def static_critic_analysis(fuzz_report: dict, machine: dict) -> dict:
             "suggestion": f"Add a transition from '{bug.get('state', 'unknown')}' to handle the dead-end (e.g., retry, go back, or show error)"
         })
     
-    # Analizza unreachable states
+    # Analyze unreachable states
     unreachable = fuzz_report.get("unreachable_states", [])
     for state in unreachable:
         critical_issues.append({
@@ -218,7 +218,7 @@ def static_critic_analysis(fuzz_report: dict, machine: dict) -> dict:
             "suggestion": f"Either add a transition path to '{state}' or remove it if unused"
         })
     
-    # Analizza unknown targets
+    # Analyze unknown targets
     unknown_bugs = [b for b in bugs if b.get("type") == "unknown_target"]
     for bug in unknown_bugs:
         critical_issues.append({
@@ -230,7 +230,7 @@ def static_critic_analysis(fuzz_report: dict, machine: dict) -> dict:
             "suggestion": f"Fix the transition target to point to a valid state"
         })
     
-    # UX decisions basate sugli stati di loading
+    # UX decisions based on loading states
     states = machine.get("states", {})
     loading_states = [s for s in states.keys() if "loading" in s.lower()]
     if loading_states:
@@ -241,7 +241,7 @@ def static_critic_analysis(fuzz_report: dict, machine: dict) -> dict:
             "options": ["Skeleton screens", "Loading spinner with progress", "Static placeholder", "Shimmer effect"]
         })
     
-    # Edge cases basati sugli stati di errore
+    # Edge cases based on error states
     error_states = [s for s in states.keys() if "error" in s.lower() or "timeout" in s.lower()]
     if error_states:
         edge_cases.append({
@@ -277,7 +277,7 @@ def static_critic_analysis(fuzz_report: dict, machine: dict) -> dict:
 
 
 def print_critic_report(report: dict):
-    """Stampa il report del critic."""
+    """Print the critic report."""
     
     print("\n" + "=" * 60)
     print("CRITIC REVIEW REPORT")
@@ -330,7 +330,7 @@ def print_critic_report(report: dict):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Critic - Revisione critica specifica funzionale")
+    parser = argparse.ArgumentParser(description="Critic - Critical review of functional specification")
     parser.add_argument("--fuzz-report", type=str, default="output/fuzz_report.json",
                         help="Fuzz report JSON file")
     parser.add_argument("--spec", type=str, default="output/spec/spec.md",
@@ -345,7 +345,7 @@ def main():
                         help="Force LLM usage even if static analysis is available")
     args = parser.parse_args()
     
-    # Carica fuzz report
+    # Load fuzz report
     if not os.path.exists(args.fuzz_report):
         print(f"⚠️  Fuzz report not found: {args.fuzz_report}")
         print("   Creating empty report...")
@@ -354,20 +354,20 @@ def main():
         with open(args.fuzz_report, "r", encoding="utf-8") as f:
             fuzz_report = json.load(f)
     
-    # Carica spec
+    # Load spec
     spec_text = ""
     if os.path.exists(args.spec):
         with open(args.spec, "r", encoding="utf-8") as f:
             spec_text = f.read()
     
-    # Carica context (opzionale)
+    # Load context (optional)
     context_text = ""
     if args.context and os.path.exists(args.context):
         with open(args.context, "r", encoding="utf-8") as f:
             context_text = f.read()
         print(f"📄 Context loaded: {len(context_text)} chars")
     
-    # Carica machine
+    # Load machine
     if not os.path.exists(args.machine):
         print(f"Error: Machine file not found: {args.machine}")
         sys.exit(1)
@@ -379,13 +379,13 @@ def main():
     print(f"   Spec size: {len(spec_text)} chars")
     print(f"   States: {len(machine.get('states', {}))}")
     
-    # Prova LLM prima se richiesto o se ci sono bug
+    # Try LLM first if requested or if there are bugs
     llm_result = None
     if args.use_llm or fuzz_report.get("summary", {}).get("bugs_found", 0) > 0 or context_text:
         print(f"\n  🤖 Trying LLM critic...")
         llm_result = call_llm_critic(fuzz_report, spec_text, machine, context_text)
     
-    # Fallback su analisi statica
+    # Fallback to static analysis
     if llm_result:
         print(f"  ✅ LLM critic succeeded")
         report = llm_result
@@ -393,7 +393,7 @@ def main():
         print(f"  📊 Using static critic analysis")
         report = static_critic_analysis(fuzz_report, machine)
     
-    # Aggiungi metadata
+    # Add metadata
     report["metadata"] = {
         "timestamp": datetime.now().isoformat(),
         "method": "llm" if llm_result else "static",
@@ -404,7 +404,7 @@ def main():
     
     print_critic_report(report)
     
-    # Salva output
+    # Save output
     output_file = args.output
     os.makedirs(os.path.dirname(output_file) if os.path.dirname(output_file) else ".", exist_ok=True)
     with open(output_file, "w", encoding="utf-8") as f:

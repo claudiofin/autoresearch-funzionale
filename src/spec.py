@@ -1,22 +1,23 @@
 """
-Spec generator per analisi funzionale automatica.
-Legge project_context.md e genera spec.md con diagrammi PlantUML e macchina a stati XState.
+Spec generator for automatic functional analysis.
 
-APPROCCIO ITERATIVO:
-- Iterazione 1: genera da zero
-- Iterazioni successive: modifica la macchina esistente basandosi su:
-  - Suggerimenti dell'analista (stati/transizioni mancanti)
-  - Feedback del critic (critical issues da correggere)
+Reads project_context.md and generates spec.md with PlantUML diagrams and XState state machine.
+
+ITERATIVE APPROACH:
+- Iteration 1: generate from scratch
+- Subsequent iterations: modify existing machine based on:
+  - Analyst suggestions (missing states/transitions)
+  - Critic feedback (critical issues to fix)
   - Validator errors (dead-end states, unreachable states)
 
 Usage:
     python run.py spec --context output/project_context.md
     
 Environment Variables:
-    LLM_API_KEY: La tua chiave API (OBBLIGATORIA)
+    LLM_API_KEY: Your API key (REQUIRED)
     LLM_PROVIDER: Provider (openai, anthropic, google, dashscope)
-    LLM_BASE_URL: URL base dell'API (opzionale, override)
-    LLM_MODEL: Modello da usare (opzionale, override)
+    LLM_BASE_URL: Base API URL (optional, override)
+    LLM_MODEL: Model to use (optional, override)
 """
 
 import os
@@ -42,7 +43,7 @@ TIME_BUDGET = 300
 # ---------------------------------------------------------------------------
 
 def generate_base_machine() -> dict:
-    """Genera una macchina a stati base vuota."""
+    """Generate an empty base state machine."""
     return {
         "id": "appFlow",
         "initial": "app_idle",
@@ -168,23 +169,23 @@ def generate_plantuml_sequence(flows: list) -> str:
 
 
 # ---------------------------------------------------------------------------
-# LLM Client - APPROCCIO ITERATIVO
+# LLM Client - ITERATIVE APPROACH
 # ---------------------------------------------------------------------------
 
 def call_llm_spec(context_text: str, analyst_suggestions: dict = None, 
                   existing_machine: dict = None, critic_feedback: dict = None,
                   max_retries: int = 3) -> dict:
-    """Chiama l'LLM per generare/modificare la specifica funzionale.
+    """Call the LLM to generate/modify the functional specification.
     
-    APPROCCIO ITERATIVO:
-    - Se esiste una macchina esistente, la passiamo all'LLM
-    - L'LLM deve MODIFICARE la macchina, non rigenerarla
-    - I suggerimenti dell'analista indicano cosa aggiungere
-    - Il feedback del critic indica cosa correggere
+    ITERATIVE APPROACH:
+    - If an existing machine exists, pass it to the LLM
+    - The LLM must MODIFY the machine, not regenerate it
+    - Analyst suggestions indicate what to add
+    - Critic feedback indicates what to fix
     """
     api_key = os.getenv("LLM_API_KEY", "")
     if not api_key:
-        print("❌ ERRORE: LLM_API_KEY non è settato.")
+        print("❌ ERROR: LLM_API_KEY is not set.")
         sys.exit(1)
     
     provider = os.getenv("LLM_PROVIDER", DEFAULT_PROVIDER)
@@ -196,17 +197,17 @@ def call_llm_spec(context_text: str, analyst_suggestions: dict = None,
         base_url = os.getenv("LLM_BASE_URL")
         model = os.getenv("LLM_MODEL")
         if not base_url or not model:
-            print(f"❌ ERRORE: Provider '{provider}' non riconosciuto.")
+            print(f"❌ ERROR: Provider '{provider}' not recognized.")
             sys.exit(1)
     
     try:
         from openai import OpenAI
         client = OpenAI(api_key=api_key, base_url=base_url)
     except ImportError:
-        print("❌ ERRORE: openai non installato.")
+        print("❌ ERROR: openai not installed.")
         sys.exit(1)
     
-    # Tronca contesto
+    # Truncate context
     max_context = 4000
     if len(context_text) > max_context:
         lines = context_text.split("\n")
@@ -215,7 +216,7 @@ def call_llm_spec(context_text: str, analyst_suggestions: dict = None,
         if len(context_text) > max_context:
             context_text = context_text[:max_context]
     
-    # Costruisci sezione macchina esistente (se c'è)
+    # Build existing machine section (if any)
     existing_section = ""
     if existing_machine:
         existing_states = list(existing_machine.get("states", {}).keys())
@@ -226,19 +227,19 @@ def call_llm_spec(context_text: str, analyst_suggestions: dict = None,
         
         existing_section = f"""
 
-MACCHINA A STATI ESISTENTE (NON RIMUOVERE STATI, SOLO AGGIUNGERE/CORREGGERE):
-Stati attuali ({len(existing_states)}): {', '.join(existing_states[:20])}
-Transizioni attuali ({len(existing_transitions)}):
+EXISTING STATE MACHINE (DO NOT REMOVE STATES, ONLY ADD/FIX):
+Current states ({len(existing_states)}): {', '.join(existing_states[:20])}
+Current transitions ({len(existing_transitions)}):
 {chr(10).join(existing_transitions[:30])}
 
-ISTRUZIONI:
-- MANTIENI tutti gli stati esistenti
-- AGGIUNGI i nuovi stati dai suggerimenti dell'analista
-- CORREGGI le transizioni per risolvere i dead-end states
-- NON RIMUOVERE mai uno stato esistente
+INSTRUCTIONS:
+- KEEP all existing states
+- ADD new states from analyst suggestions
+- FIX transitions to resolve dead-end states
+- NEVER remove an existing state
 """
     
-    # Costruisci sezione suggerimenti analista
+    # Build analyst suggestions section
     suggestions_section = ""
     if analyst_suggestions:
         states = analyst_suggestions.get("states", [])
@@ -247,51 +248,51 @@ ISTRUZIONI:
         events = analyst_suggestions.get("events", [])
         suggestions_section = f"""
 
-SUGGERIMENTI DELL'ANALISTA (DEVI INCLUDERE QUESTI):
-- {len(states)} stati suggeriti: {', '.join(s['name'] for s in states[:15])}
-- {len(transitions)} transizioni suggerite
-- {len(edge_cases)} edge case da gestire
-- {len(events)} eventi da supportare: {', '.join(e['name'] for e in events[:10])}
+ANALYST SUGGESTIONS (YOU MUST INCLUDE THESE):
+- {len(states)} suggested states: {', '.join(s['name'] for s in states[:15])}
+- {len(transitions)} suggested transitions
+- {len(edge_cases)} edge cases to handle
+- {len(events)} events to support: {', '.join(e['name'] for e in events[:10])}
 
-AZIONI RICHIESTE:
-1. Aggiungi TUTTI gli stati suggeriti che non esistono già
-2. Aggiungi le transizioni suggerite
-3. Gestisci gli edge case con stati di errore appropriati
+REQUIRED ACTIONS:
+1. Add ALL suggested states that don't already exist
+2. Add suggested transitions
+3. Handle edge cases with appropriate error states
 """
     
-    # Costruisci sezione critic feedback
+    # Build critic feedback section
     critic_section = ""
     if critic_feedback:
         critical = critic_feedback.get("summary", {}).get("critical_issues", [])
         if critical:
             critic_section = f"""
 
-CRITICAL ISSUES DA CORREGGERE (PRIORITÀ ALTA):
+CRITICAL ISSUES TO FIX (HIGH PRIORITY):
 {chr(10).join(f'- {c}' for c in critical[:10])}
 
-AZIONI RICHIESTE:
-- Correggi OGNI critical issue sopra
-- Aggiungi transizioni di uscita per dead-end states
-- Connetti stati non raggiungibili allo stato iniziale
+REQUIRED ACTIONS:
+- Fix EVERY critical issue above
+- Add exit transitions for dead-end states
+- Connect unreachable states to the initial state
 """
     
-    # Determina se è iterativo o da zero
+    # Determine if iterative or from scratch
     is_iterative = existing_machine is not None and len(existing_machine.get("states", {})) > 0
     
     if is_iterative:
-        task = "MODIFICA la macchina a stati esistente. NON rigenerare da zero."
+        task = "MODIFY the existing state machine. DO NOT regenerate from scratch."
     else:
-        task = "Genera una nuova macchina a stati dal contesto."
+        task = "Generate a new state machine from the context."
     
     prompt = f"""{task}
 
-Contesto del progetto:
+Project context:
 {context_text}
 {existing_section}
 {suggestions_section}
 {critic_section}
 
-Rispondi SOLO con JSON valido:
+Respond ONLY with valid JSON:
 
 {{
   "states": [{{"name": "snake_case", "description": "...", "entry_actions": [], "exit_actions": []}}],
@@ -301,37 +302,37 @@ Rispondi SOLO con JSON valido:
   "api_endpoints": [{{"method": "GET", "path": "...", "description": "..."}}]
 }}
 
-Regole:
-1. JSON valido 100% - nessun testo fuori
-2. snake_case stati, UPPER_CASE eventi
-3. Ogni stato API ha ERROR, TIMEOUT, CANCEL
-4. Copri: auth, core flow, error handling, empty states
-5. Stato iniziale: app_idle (DEVE esistere)
-6. Ogni stato deve avere almeno una transizione in uscita (no dead-end)
-7. Tutti gli stati devono essere raggiungibili da app_idle
+Rules:
+1. 100% valid JSON - no text outside
+2. snake_case for states, UPPER_CASE for events
+3. Every API state has ERROR, TIMEOUT, CANCEL
+4. Cover: auth, core flow, error handling, empty states
+5. Initial state: app_idle (MUST exist)
+6. Every state must have at least one exit transition (no dead-end)
+7. All states must be reachable from app_idle
 """
     
-    print(f"  🤖 Chiamata LLM per spec ({model}), contesto: {len(context_text)} chars...")
+    print(f"  🤖 Calling LLM for spec ({model}), context: {len(context_text)} chars...")
     if existing_machine:
-        print(f"  📦 Macchina esistente: {len(existing_machine.get('states', {}))} stati")
+        print(f"  📦 Existing machine: {len(existing_machine.get('states', {}))} states")
     
     for attempt in range(max_retries):
         try:
-            print(f"  Tentativo {attempt + 1}/{max_retries}...")
+            print(f"  Attempt {attempt + 1}/{max_retries}...")
             response = client.chat.completions.create(
                 timeout=180,
                 model=model,
                 messages=[
-                    {"role": "system", "content": "Sei un Product Manager esperto di macchine a stati. Rispondi SOLO con JSON valido. Inizia con { e termina con }. Nessun markdown, nessun testo extra."},
+                    {"role": "system", "content": "You are an expert Product Manager specializing in state machines. Respond ONLY with valid JSON. Start with { and end with }. No markdown, no extra text."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.3,
-                max_tokens=8192,  # Aumentato per gestire macchine più grandi
+                max_tokens=8192,  # Increased to handle larger machines
             )
             
             content = response.choices[0].message.content.strip()
             
-            # Estrai JSON
+            # Extract JSON
             if content.startswith("```json"):
                 content = content[7:]
             if content.startswith("```"):
@@ -346,32 +347,32 @@ Regole:
                 content = content[start:end+1]
             
             data = json.loads(content)
-            print(f"  ✅ LLM ha restituito {len(json.dumps(data))} chars di JSON valido")
+            print(f"  ✅ LLM returned {len(json.dumps(data))} chars of valid JSON")
             return data
             
         except json.JSONDecodeError as e:
-            print(f"  Tentativo {attempt + 1} fallito (JSON invalido): {e}")
+            print(f"  Attempt {attempt + 1} failed (invalid JSON): {e}")
             try:
                 start = content.find("{")
                 end = content.rfind("}")
                 if start >= 0 and end > start:
                     partial = content[start:end+1]
                     data = json.loads(partial)
-                    print(f"  ✅ JSON estratto: {len(partial)} chars")
+                    print(f"  ✅ JSON extracted: {len(partial)} chars")
                     return data
             except:
                 pass
             continue
         except Exception as e:
-            print(f"  Tentativo {attempt + 1} fallito: {e}")
+            print(f"  Attempt {attempt + 1} failed: {e}")
             continue
     
-    print("❌ ERRORE: Tutti i tentativi LLM falliti.")
+    print("❌ ERROR: All LLM attempts failed.")
     sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
-# Main Analysis Function - APPROCCIO ITERATIVO
+# Main Analysis Function - ITERATIVE APPROACH
 # ---------------------------------------------------------------------------
 
 def run_analysis(context_file: str, output_file: str, time_budget: int, 
@@ -380,10 +381,10 @@ def run_analysis(context_file: str, output_file: str, time_budget: int,
                  critic_feedback: dict = None) -> dict:
     """Run the functional analysis and generate spec.md.
     
-    APPROCCIO ITERATIVO:
-    1. Carica la macchina esistente (se esiste)
-    2. Passala all'LLM con suggerimenti e critic feedback
-    3. L'LLM modifica la macchina invece di rigenerarla
+    ITERATIVE APPROACH:
+    1. Load existing machine (if exists)
+    2. Pass it to the LLM with suggestions and critic feedback
+    3. The LLM modifies the machine instead of regenerating it
     """
     
     start_time = time.time()
@@ -395,12 +396,12 @@ def run_analysis(context_file: str, output_file: str, time_budget: int,
     with open(context_file, "r", encoding="utf-8") as f:
         context_text = f.read()
     
-    # Carica la macchina esistente (se c'è)
+    # Load existing machine (if any)
     existing_machine = None
     if existing_machine_file and os.path.exists(existing_machine_file):
         with open(existing_machine_file, "r", encoding="utf-8") as f:
             existing_machine = json.load(f)
-        print(f"  📦 Macchina esistente caricata: {len(existing_machine.get('states', {}))} stati")
+        print(f"  📦 Existing machine loaded: {len(existing_machine.get('states', {}))} states")
     
     print(f"Context loaded: {len(context_text)} characters")
     if analyst_suggestions:
@@ -408,9 +409,9 @@ def run_analysis(context_file: str, output_file: str, time_budget: int,
     if critic_feedback:
         critical = critic_feedback.get("summary", {}).get("critical_issues", [])
         print(f"  🚨 Critic feedback: {len(critical)} critical issues")
-    print("  🚀 Generazione con LLM...")
+    print("  🚀 Generating with LLM...")
     
-    # Call LLM (approccio iterativo)
+    # Call LLM (iterative approach)
     try:
         llm_data = call_llm_spec(
             context_text, 
@@ -420,17 +421,17 @@ def run_analysis(context_file: str, output_file: str, time_budget: int,
         )
         print(f"  ✅ LLM: {len(llm_data.get('states', []))} states, {len(llm_data.get('transitions', []))} transitions")
     except Exception as e:
-        print(f"❌ ERRORE: LLM fallito: {e}")
-        print("   Il sistema non può funzionare senza LLM.")
+        print(f"❌ ERROR: LLM failed: {e}")
+        print("   The system cannot work without an LLM.")
         sys.exit(1)
     
-    # Merge con la macchina esistente (se c'è)
+    # Merge with existing machine (if any)
     if existing_machine:
-        # Inizia dalla macchina esistente
+        # Start from existing machine
         machine = existing_machine.copy()
         machine["states"] = dict(existing_machine.get("states", {}))
         
-        # Aggiungi nuovi stati dai suggerimenti LLM
+        # Add new states from LLM suggestions
         for state in llm_data.get("states", []):
             state_name = state["name"]
             if state_name not in machine["states"]:
@@ -440,7 +441,7 @@ def run_analysis(context_file: str, output_file: str, time_budget: int,
                     "on": {}
                 }
             else:
-                # Aggiorna stato esistente con nuove entry/exit actions
+                # Update existing state with new entry/exit actions
                 existing_entry = machine["states"][state_name].get("entry", [])
                 new_entry = state.get("entry_actions", [])
                 machine["states"][state_name]["entry"] = list(set(existing_entry + new_entry))
@@ -449,7 +450,7 @@ def run_analysis(context_file: str, output_file: str, time_budget: int,
                 new_exit = state.get("exit_actions", [])
                 machine["states"][state_name]["exit"] = list(set(existing_exit + new_exit))
         
-        # Aggiungi nuove transizioni
+        # Add new transitions
         for trans in llm_data.get("transitions", []):
             from_state = trans["from_state"]
             to_state = trans["to_state"]
@@ -457,7 +458,7 @@ def run_analysis(context_file: str, output_file: str, time_budget: int,
             if from_state in machine["states"]:
                 machine["states"][from_state]["on"][event] = to_state
     else:
-        # Genera da zero
+        # Generate from scratch
         machine = generate_base_machine()
         
         for state in llm_data.get("states", []):
@@ -522,39 +523,39 @@ def run_analysis(context_file: str, output_file: str, time_budget: int,
     edge_cases_count = len(edge_cases)
     
     # Build spec
-    spec_content = f"""# Specifica Funzionale
+    spec_content = f"""# Functional Specification
 
-Generato: {timestamp}
+Generated: {timestamp}
 
-> Specifica generata automaticamente dal contesto del progetto.
+> Specification automatically generated from project context.
 
 ---
 
-## 1. Panoramica
+## 1. Overview
 
 ### 1.1 Scope
-- Flussi utente
-- Macchina a stati (XState eseguibile)
-- Analisi edge case
-- Gestione errori
-- Contratti API
+- User flows
+- State machine (executable XState)
+- Edge case analysis
+- Error handling
+- API contracts
 
 ---
 
-## 2. Flussi Utente
-{flows_md if flows_md else "*Nessun flusso generato*"}
+## 2. User Flows
+{flows_md if flows_md else "*No flows generated*"}
 
 ---
 
-## 3. Macchina a Stati
+## 3. State Machine
 
-### 3.1 Diagramma Stati (PlantUML)
+### 3.1 State Diagram (PlantUML)
 
 ```plantuml
 {statechart}
 ```
 
-### 3.2 Configurazione XState
+### 3.2 XState Configuration
 
 ```json
 {json.dumps(machine, indent=2)}
@@ -562,7 +563,7 @@ Generato: {timestamp}
 
 ---
 
-## 4. Diagramma Sequenza (PlantUML)
+## 4. Sequence Diagram (PlantUML)
 
 ```plantuml
 {sequence}
@@ -572,72 +573,72 @@ Generato: {timestamp}
 
 ## 5. Edge Cases
 
-{edge_cases_md if edge_cases else "*Nessun edge case generato*"}
+{edge_cases_md if edge_cases else "*No edge cases generated*"}
 
 ---
 
-## 6. Gestione Errori
+## 6. Error Handling
 
-### 6.1 Tipi di Errore
+### 6.1 Error Types
 
-| Codice | Tipo | Messaggio Utente | Azione |
+| Code | Type | User Message | Action |
 |--------|------|------------------|--------|
-| 400 | Bad Request | "Dati non validi." | Correggi input |
-| 401 | Unauthorized | "Sessione scaduta." | Login |
-| 403 | Forbidden | "Accesso negato." | Contatta support |
-| 404 | Not Found | "Risorsa non trovata." | Torna alla home |
-| 408 | Timeout | "Richiesta scaduta." | Riprova |
-| 429 | Rate Limited | "Troppe richieste." | Attendi |
-| 500 | Server Error | "Errore temporaneo." | Riprova |
-| 503 | Unavailable | "Servizio non disponibile." | Riprova dopo |
+| 400 | Bad Request | "Invalid data." | Fix input |
+| 401 | Unauthorized | "Session expired." | Login |
+| 403 | Forbidden | "Access denied." | Contact support |
+| 404 | Not Found | "Resource not found." | Return to home |
+| 408 | Timeout | "Request timed out." | Retry |
+| 429 | Rate Limited | "Too many requests." | Wait |
+| 500 | Server Error | "Temporary error." | Retry |
+| 503 | Unavailable | "Service unavailable." | Retry later |
 
-### 6.2 Stati di Errore
+### 6.2 Error States
 
-La macchina a stati gestisce gli errori attraverso stati dedicati che:
-- Registrano l'errore per il debug
-- Mostrano messaggi appropriati in italiano
-- Offrono opzioni di recupero (retry, cancel, contact support)
+The state machine handles errors through dedicated states that:
+- Log the error for debugging
+- Show appropriate messages to the user
+- Offer recovery options (retry, cancel, contact support)
 
 ---
 
-## 7. Validazione Dati
+## 7. Data Validation
 
-### 7.1 Regole di Validazione
+### 7.1 Validation Rules
 
-| Campo | Tipo | Obbligatorio | Pattern | Max Length |
+| Field | Type | Required | Pattern | Max Length |
 |-------|------|--------------|---------|------------|
-| email | email | Sì | RFC 5322 | 254 |
-| password | password | Sì | Min 8 chars | 128 |
-| search_query | string | Sì | Alfanumerico + spazi | 100 |
-| quantity | integer | Sì | > 0 | 9999 |
+| email | email | Yes | RFC 5322 | 254 |
+| password | password | Yes | Min 8 chars | 128 |
+| search_query | string | Yes | Alphanumeric + spaces | 100 |
+| quantity | integer | Yes | > 0 | 9999 |
 
-### 7.2 Feedback Validazione
+### 7.2 Validation Feedback
 
-- Validazione inline al blur
-- Validazione summary all'invio
-- Messaggi chiari in italiano con istruzioni
-
----
-
-## 8. Contratto API
-{endpoints_md if endpoints_md else "*Nessun endpoint generato*"}
+- Inline validation on blur
+- Summary validation on submit
+- Clear messages with instructions
 
 ---
 
-## 9. Metriche
-
-### 9.1 Copertura Analisi
-
-- Stati definiti: {states_count}
-- Transizioni definite: {transitions_count}
-- Edge case identificati: {edge_cases_count}
-- Tipi errore gestiti: 8
+## 8. API Contract
+{endpoints_md if endpoints_md else "*No endpoints generated*"}
 
 ---
 
-## Appendice A: Contesto Originale
+## 9. Metrics
 
-Il contesto originale del progetto è in `project_context.md`.
+### 9.1 Analysis Coverage
+
+- States defined: {states_count}
+- Transitions defined: {transitions_count}
+- Edge cases identified: {edge_cases_count}
+- Error types handled: 8
+
+---
+
+## Appendix A: Original Context
+
+The original project context is in `project_context.md`.
 """
     
     # Write spec
@@ -720,15 +721,15 @@ def main():
     
     print()
     print("=" * 50)
-    print("ANALISI COMPLETATA")
+    print("ANALYSIS COMPLETE")
     print("=" * 50)
-    print(f"Stati definiti:      {metrics['states_count']}")
-    print(f"Transizioni:         {metrics['transitions_count']}")
+    print(f"States defined:      {metrics['states_count']}")
+    print(f"Transitions:         {metrics['transitions_count']}")
     print(f"Edge cases:          {metrics['edge_cases_count']}")
-    print(f"Tipi errore:         {metrics['error_types_count']}")
-    print(f"Tempo:               {metrics['elapsed_seconds']:.1f}s")
+    print(f"Error types:         {metrics['error_types_count']}")
+    print(f"Time:                {metrics['elapsed_seconds']:.1f}s")
     print()
-    print(f"File output:")
+    print(f"Output files:")
     print(f"  - {metrics['spec_file']}")
     print(f"  - {metrics['machine_file']}")
 

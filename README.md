@@ -1,101 +1,108 @@
-# Autoresearch - Analisi Funzionale Automatica
+# Autoresearch - Automatic Functional Analysis
 
-> **Il concetto**: dare a un'IA un progetto (note, screenshot, HTML) e lasciare che generi autonomamente la specifica funzionale completa con diagrammi, edge case e macchine a stati eseguibili.
+> **The concept**: give an AI a project (notes, screenshots, HTML) and let it autonomously generate the complete functional specification with diagrams, edge cases, and executable state machines.
 
-L'idea è ispirata al progetto [autoresearch](https://github.com/karpathy/autoresearch) di Andrej Karpathy, ma applicata al Product Management invece che al training di modelli LLM.
+The idea is inspired by Andrej Karpathy's [autoresearch](https://github.com/karpathy/autoresearch) project, but applied to Product Management instead of LLM model training.
 
-## Come Funziona
+## How It Works
 
-1. **Input**: file di testo, note, screenshot, HTML delle UI
-2. **Ingest**: estrae il contesto dal materiale grezzo
-3. **Analyst**: l'LLM analizza e genera stati, transizioni, edge case
-4. **Spec**: genera specifica funzionale con diagrammi PlantUML e macchina a stati XState
-5. **Completeness**: valida che tutti i flussi critici siano presenti
-6. **Fuzzer**: testa la macchina a stati con percorsi casuali
-7. **Loop**: il sistema itera automaticamente migliorando la specifica
+1. **Input**: text files, notes, screenshots, HTML from UIs
+2. **Ingest**: extracts context from raw material
+3. **Analyst**: the LLM analyzes and generates states, transitions, edge cases
+4. **Spec**: generates functional specification with PlantUML diagrams and XState state machine
+5. **Validator**: validates that all critical flows are present
+6. **Fuzzer**: tests the state machine with random paths
+7. **Critic**: hostile reviewer (finds missing edge cases)
+8. **Loop**: the system iterates automatically improving the specification
 
 ## Quick Start
 
 ```bash
-# 1. Installa dipendenze
+# 1. Install dependencies
 pip install -r requirements.txt
 
-# 2. Configura LLM (OBBLIGATORIO)
-export LLM_API_KEY="la-tua-chiave"
-export LLM_PROVIDER="openai"  # o anthropic, google, dashscope
+# 2. Configure LLM (REQUIRED)
+export LLM_API_KEY="your-key"
+export LLM_PROVIDER="openai"  # or anthropic, google, dashscope
 
-# 3. Metti i tuoi input in inputs/
-cp tuoi_file.txt inputs/
+# 3. Put your inputs in inputs/
+cp your_files.txt inputs/
 
-# 4. Esegui il loop autonomo (con ingest automatico)
+# 4. Run the autonomous loop (with automatic ingest)
 python run.py loop --input-dir inputs/ --max-iterations 10 --force
 ```
 
-### Modalità di Esecuzione
+### Execution Modes
 
 ```bash
-# Modalità 1: Loop completo con ingest automatico
+# Mode 1: Complete loop with automatic ingest
 python run.py loop --input-dir inputs/ --max-iterations 10
 
-# Modalità 2: Loop senza ingest (contesto già esistente)
+# Mode 2: Loop without ingest (context already exists)
 python run.py loop --context output/project_context.md --max-iterations 10
 
-# Modalità 3: Solo ingest
+# Mode 3: Ingest only
 python run.py ingest --input-dir inputs/
 
-# Modalità 4: Step singoli
+# Mode 4: Individual steps
 python run.py analyst --context output/project_context.md
 python run.py spec --context output/project_context.md
-python run.py completeness --spec output/spec.md --machine output/spec_machine.json
+python run.py validator --machine output/spec/spec_machine.json
 python run.py fuzzer --machine output/spec_machine.json
+python run.py critic --fuzz-report output/fuzz_report.json
 ```
 
-## Struttura del Progetto
+## Project Structure
 
 ```
 autoresearch/
-├── inputs/              # I tuoi file di input (testo, note, HTML)
-├── output/              # File generati automaticamente
-│   ├── project_context.md   # Contesto estratto
-│   ├── analyst_suggestions.json  # Analisi dell'LLM
-│   ├── spec.md              # Specifica funzionale con PlantUML
-│   ├── spec_machine.json    # Macchina a stati XState
-│   └── fuzzer_report.json   # Report del fuzzer
+├── inputs/              # Your input files (text, notes, HTML)
+├── output/              # Automatically generated files
+│   ├── context/
+│   │   └── project_context.md   # Extracted context
+│   ├── analyst/
+│   │   └── analyst_suggestions.json  # LLM analysis
+│   ├── spec/
+│   │   ├── spec.md              # Functional specification with PlantUML
+│   │   └── spec_machine.json    # XState state machine
+│   ├── fuzzer_report.json   # Fuzzer report
+│   └── critic_feedback.json # Critic feedback
 ├── src/
-│   ├── config.py          # Configurazione LLM multi-provider
-│   ├── rules.py           # Regole strutturali (COSA deve esserci)
-│   ├── ingest.py          # Estrae contesto dagli input
-│   ├── analyst.py         # Analizza e genera stati/transizioni
-│   ├── spec.py            # Genera specifica con PlantUML + XState
-│   ├── completeness.py    # Valida completezza flussi
-│   ├── fuzzer.py          # Testa macchina a stati
-│   ├── critic.py          # Revisore ostile (edge case)
-│   └── loop.py            # Loop autonomo
-├── run.py                 # Entry point principale
-└── requirements.txt       # Dipendenze Python
+│   ├── config.py          # Multi-provider LLM configuration
+│   ├── rules.py           # Structural rules (WHAT must be there)
+│   ├── ingest.py          # Extracts context from inputs
+│   ├── analyst.py         # Analyzes and generates states/transitions
+│   ├── spec.py            # Generates specification with PlantUML + XState
+│   ├── validator.py       # Validates state machine
+│   ├── fuzzer.py          # Tests state machine
+│   ├── critic.py          # Hostile reviewer (edge cases)
+│   ├── ui_generator.py    # Generates UI specs for AI generators
+│   └── loop.py            # Autonomous loop
+├── run.py                 # Main entry point
+└── requirements.txt       # Python dependencies
 ```
 
-## Configurazione LLM
+## LLM Configuration
 
-Il sistema supporta multiple LLM provider. Configura con variabili d'ambiente:
+The system supports multiple LLM providers. Configure with environment variables:
 
-| Variabile | Descrizione | Esempio |
+| Variable | Description | Example |
 |-----------|-------------|---------|
-| `LLM_API_KEY` | Chiave API (OBBLIGATORIA) | `sk-...` |
-| `LLM_PROVIDER` | Provider da usare | `openai`, `anthropic`, `google`, `dashscope` |
-| `LLM_BASE_URL` | URL base (opzionale, override) | `https://api.openai.com/v1` |
-| `LLM_MODEL` | Modello da usare (opzionale, override) | `gpt-4o`, `claude-3-5-sonnet-20241022` |
+| `LLM_API_KEY` | API Key (REQUIRED) | `sk-...` |
+| `LLM_PROVIDER` | Provider to use | `openai`, `anthropic`, `google`, `dashscope` |
+| `LLM_BASE_URL` | Base URL (optional, override) | `https://api.openai.com/v1` |
+| `LLM_MODEL` | Model to use (optional, override) | `gpt-4o`, `claude-3-5-sonnet-20241022` |
 
-### Provider Supportati
+### Supported Providers
 
-| Provider | `LLM_PROVIDER` | Modello Default |
+| Provider | `LLM_PROVIDER` | Default Model |
 |----------|----------------|-----------------|
 | OpenAI | `openai` | `gpt-4o` |
 | Anthropic | `anthropic` | `claude-3-5-sonnet-20241022` |
 | Google | `google` | `gemini-2.0-flash` |
 | DashScope (Alibaba) | `dashscope` | `qwen-plus` |
 
-### Esempi
+### Examples
 
 ```bash
 # OpenAI (default)
@@ -124,82 +131,82 @@ export LLM_MODEL="your-model"
 
 ### UI Specifications (output/ui_specs/)
 
-Dopo aver generato la macchina a stati, puoi usare `ui_generator.py` per creare **Blueprint Markdown** pronti per essere usati con AI UI generators:
+After generating the state machine, you can use `ui_generator.py` to create **Markdown Blueprints** ready to be used with AI UI generators:
 
 ```bash
-# Genera tutte le UI specs (stati + schermate + README)
+# Generate all UI specs (states + screens + README)
 python3 src/ui_generator.py
 
-# Con provider specifico
+# With specific provider
 python3 src/ui_generator.py --provider ollama --model llama3
 
-# Solo stati o solo schermate
+# States only or screens only
 python3 src/ui_generator.py --states-only
 python3 src/ui_generator.py --screens-only
 ```
 
-#### Cosa genera
+#### What it generates
 
 ```
 output/ui_specs/
-├── README.md              ← Indice con diagramma PlantUML
-├── screens/               ← Schermate reali (pronte per v0/Claude)
+├── README.md              ← Index with PlantUML diagram
+├── screens/               ← Real screens (ready for v0/Claude)
 │   ├── 01_login.md
 │   ├── 02_dashboard.md
-│   ├── 03_catalogo.md
+│   ├── 03_catalog.md
 │   └── ...
-└── states/                ← Stati macchina (riferimento)
+└── states/                ← Machine states (reference)
     ├── UI_app_idle.md
-    ├── UI_successo.md
+    ├── UI_success.md
     └── ...
 ```
 
-#### Come usarli con AI UI Generators
+#### How to use them with AI UI Generators
 
-1. **Apri** un file schermata (es. `output/ui_specs/screens/02_dashboard.md`)
-2. **Copia** tutto il contenuto
-3. **Incolla** nel tuo AI UI generator preferito:
+1. **Open** a screen file (e.g., `output/ui_specs/screens/02_dashboard.md`)
+2. **Copy** all the content
+3. **Paste** into your favorite AI UI generator:
 
-| Tool | URL | Cosa fa |
-|------|-----|---------|
-| **v0.dev** | https://v0.dev | Genera UI React/Tailwind |
-| **Claude Artifacts** | https://claude.ai | Genera componenti con logica |
-| **Bolt.new** | https://bolt.new | Genera app complete |
-| **Lovable** | https://lovable.dev | Genera UI moderne |
-| **Google Stitch** | https://stitch.google | Genera UI da prompt |
-| **Figma AI** | https://figma.com | Genera design |
+| Tool | URL | What it does |
+|------|-----|--------------|
+| **v0.dev** | https://v0.dev | Generates React/Tailwind UI |
+| **Claude Artifacts** | https://claude.ai | Generates components with logic |
+| **Bolt.new** | https://bolt.new | Generates complete apps |
+| **Lovable** | https://lovable.dev | Generates modern UIs |
+| **Google Stitch** | https://stitch.google | Generates UIs from prompts |
+| **Figma AI** | https://figma.com | Generates designs |
 
-Ogni file Markdown contiene:
-- Descrizione della schermata
-- Dati necessari con mock data
-- Componenti UI dettagliati
-- Mapping XState (ogni bottone → evento)
-- Stati UI (loading, errore, vuoto)
-- Note per generatori AI (Tailwind, Shadcn)
+Each Markdown file contains:
+- Screen description
+- Required data with mock data
+- Detailed UI components
+- XState mapping (each button → event)
+- UI states (loading, error, empty)
+- Notes for AI generators (Tailwind, Shadcn)
 
-### Specifica Funzionale (spec.md)
+### Functional Specification (spec.md)
 
-La specifica generata include:
+The generated specification includes:
 
-1. **User Flows**: descrizione testuale di tutti i flussi utente
-2. **State Diagram (PlantUML)**: diagramma di stato eseguibile
-3. **XState Configuration**: macchina a stati JSON compatibile con XState
-4. **Sequence Diagram (PlantUML)**: diagramma di sequenza User → Interface → Backend
-5. **Edge Cases**: tabella con tutti gli edge case identificati
-6. **Error Handling**: gestione errori con codici HTTP e recovery
-7. **Data Validation**: regole di validazione input
-8. **API Contract**: contratti API generati dall'LLM
+1. **User Flows**: textual description of all user flows
+2. **State Diagram (PlantUML)**: executable state diagram
+3. **XState Configuration**: JSON state machine compatible with XState
+4. **Sequence Diagram (PlantUML)**: User → Interface → Backend sequence diagram
+5. **Edge Cases**: table with all identified edge cases
+6. **Error Handling**: error handling with HTTP codes and recovery
+7. **Data Validation**: input validation rules
+8. **API Contract**: API contracts generated by the LLM
 
-### Diagrammi PlantUML
+### PlantUML Diagrams
 
-I diagrammi sono in formato PlantUML, renderizzabili da:
-- Editor Markdown con supporto PlantUML (VS Code, IntelliJ)
+The diagrams are in PlantUML format, renderable by:
+- Markdown editors with PlantUML support (VS Code, IntelliJ)
 - [PlantUML Web Server](http://www.plantuml.com/plantuml/uml/)
-- GitHub (con estensione PlantUML)
+- GitHub (with PlantUML extension)
 
-### Macchina a Stati XState
+### XState State Machine
 
-La macchina a stati è in formato JSON compatibile con [XState](https://xstate.js.org/):
+The state machine is in JSON format compatible with [XState](https://xstate.js.org/):
 
 ```json
 {
@@ -227,63 +234,63 @@ La macchina a stati è in formato JSON compatibile con [XState](https://xstate.j
 
 ## Design Choices
 
-### LLM Obbligatorio
+### Required LLM
 
-Il sistema **richiede** un LLM per funzionare. Non ci sono fallback simulati.
+The system **requires** an LLM to work. There are no simulated fallbacks.
 
-- **Perché**: la qualità dell'analisi dipende dalla capacità dell'LLM di comprendere il contesto
-- **Cosa serve**: qualsiasi LLM con supporto API OpenAI-compatible
-- **Consigliato**: modelli con finestra di contesto lunga (8K+ token)
+- **Why**: the quality of the analysis depends on the LLM's ability to understand the context
+- **What you need**: any LLM with OpenAI-compatible API support
+- **Recommended**: models with long context window (8K+ tokens)
 
-### Regole vs Contenuti
+### Rules vs Contents
 
-Il sistema usa un approccio a due livelli:
+The system uses a two-level approach:
 
-1. **Regole** (`src/rules.py`): dicono COSA deve esserci (es. "deve esserci un flusso di autenticazione")
-2. **LLM**: decide COME si chiama (es. "login_form → login_pending → login_success")
+1. **Rules** (`src/rules.py`): say WHAT must be there (e.g., "there must be an authentication flow")
+2. **LLM**: decides HOW it's named (e.g., "login_form → login_pending → login_success")
 
-Questo permette al sistema di essere generico e adattarsi a qualsiasi progetto.
+This allows the system to be generic and adapt to any project.
 
-### PlantUML invece di Mermaid
+### PlantUML instead of Mermaid
 
-I diagrammi sono in PlantUML perché:
-- Supporta diagrammi di stato più complessi
-- Sintassi più leggibile per macchine a stati
-- Migliore supporto per entry/exit actions
-- Renderizzazione più bella per diagrammi di sequenza
+The diagrams are in PlantUML because:
+- Supports more complex state diagrams
+- More readable syntax for state machines
+- Better support for entry/exit actions
+- Better rendering for sequence diagrams
 
-### Loop Autonomo
+### Autonomous Loop
 
-Il sistema itera automaticamente:
+The system iterates automatically:
 
-1. **Analyst** genera stati e transizioni
-2. **Spec** genera la specifica con PlantUML
-3. **Completeness** valida che tutti i flussi siano presenti
-4. **Fuzzer** testa la macchina a stati
-5. **Critic** trova edge case mancanti
-6. **Loop** riparte dai punti deboli trovati
+1. **Analyst** generates states and transitions
+2. **Spec** generates the specification with PlantUML
+3. **Validator** validates that all flows are present
+4. **Fuzzer** tests the state machine
+5. **Critic** finds missing edge cases
+6. **Loop** restarts from the weak points found
 
-## Requisiti
+## Requirements
 
 - Python 3.10+
-- Chiave API per un LLM provider
-- 2GB RAM (per il processing dei file)
+- API key for an LLM provider
+- 2GB RAM (for file processing)
 
-### Dipendenze Opzionali
+### Optional Dependencies
 
-Per installare le dipendenze opzionali (PDF, DOCX):
+To install optional dependencies (PDF, DOCX):
 
 ```bash
 pip install -r requirements-optional.txt
 ```
 
-| Dipendenza | Per cosa | Obbligatoria? |
+| Dependency | What for | Required? |
 |------------|----------|---------------|
-| `pypdf` | Lettura PDF | No |
-| `python-docx` | Lettura DOCX | No |
-| `openai` | LLM + Vision API | **Sì** |
-| `instructor` | Output strutturato | No |
-| `beautifulsoup4` | Parsing HTML | **Sì** |
+| `pypdf` | PDF reading | No |
+| `python-docx` | DOCX reading | No |
+| `openai` | LLM + Vision API | **Yes** |
+| `instructor` | Structured output | No |
+| `beautifulsoup4` | HTML parsing | **Yes** |
 
 ## License
 

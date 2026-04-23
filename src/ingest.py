@@ -1,16 +1,17 @@
 """
-Ingestione input multimodali per analisi funzionale automatica.
-Prende screenshot, note testuali, HTML, PDF, DOCX ed estrae un contesto strutturato.
-Gli screenshot vengono analizzati con Vision API dell'LLM.
+Multimodal input ingestion for automatic functional analysis.
+
+Takes screenshots, text notes, HTML, PDF, DOCX and extracts structured context.
+Screenshots are analyzed with the LLM Vision API.
 
 Usage:
     python ingest.py --input-dir ./inputs --output-file project_context.md
     
 Environment Variables:
-    LLM_API_KEY: La tua chiave API (OBBLIGATORIA per analisi screenshot)
+    LLM_API_KEY: Your API key (REQUIRED for screenshot analysis)
     LLM_PROVIDER: Provider (openai, anthropic, google, dashscope)
-    LLM_BASE_URL: URL base dell'API (opzionale, override)
-    LLM_MODEL: Modello da usare (opzionale, override)
+    LLM_BASE_URL: Base API URL (optional, override)
+    LLM_MODEL: Model to use (optional, override)
 """
 
 import os
@@ -182,19 +183,19 @@ def process_html_files(input_dir: str) -> list[dict]:
 
 def analyze_screenshot_with_vision(image_path: str, mime_type: str) -> str:
     """
-    Analizza uno screenshot con Vision API dell'LLM.
-    Estrae: CTA, campi input, stati di errore, layout, flussi visibili.
+    Analyze a screenshot with the LLM Vision API.
+    Extracts: CTAs, input fields, error states, layout, visible flows.
     
     Args:
-        image_path: Path del file immagine
-        mime_type: MIME type dell'immagine
+        image_path: Path to the image file
+        mime_type: MIME type of the image
         
     Returns:
-        Analisi testuale dello screenshot
+        Textual analysis of the screenshot
     """
     api_key = os.getenv("LLM_API_KEY", "")
     if not api_key:
-        return "⚠️  LLM_API_KEY non settato - analisi screenshot non disponibile"
+        return "⚠️  LLM_API_KEY not set - screenshot analysis unavailable"
     
     provider = os.getenv("LLM_PROVIDER", DEFAULT_PROVIDER)
     
@@ -205,9 +206,9 @@ def analyze_screenshot_with_vision(image_path: str, mime_type: str) -> str:
         base_url = os.getenv("LLM_BASE_URL")
         model = os.getenv("LLM_MODEL")
         if not base_url or not model:
-            return f"⚠️  Provider '{provider}' non configurato per Vision"
+            return f"⚠️  Provider '{provider}' not configured for Vision"
     
-    # Leggi e codifica immagine
+    # Read and encode image
     with open(image_path, "rb") as f:
         image_data = base64.b64encode(f.read()).decode("utf-8")
     
@@ -224,7 +225,6 @@ Extract and list:
 8. **User flow implied**: what is the user trying to accomplish on this screen?
 
 Be SPECIFIC - list every element you see. Do NOT generalize.
-Respond in Italian.
 """
     
     try:
@@ -234,7 +234,7 @@ Respond in Italian.
         response = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": "Sei un UI/UX Analyst esperto. Analizza gli screenshot e estrai informazioni funzionali dettagliate."},
+                {"role": "system", "content": "You are an expert UI/UX Analyst. Analyze screenshots and extract detailed functional information."},
                 {"role": "user", "content": [
                     {"type": "text", "text": prompt},
                     {"type": "image_url", "image_url": {
@@ -250,7 +250,7 @@ Respond in Italian.
         return response.choices[0].message.content.strip()
         
     except Exception as e:
-        return f"⚠️  Errore analisi Vision: {e}"
+        return f"⚠️  Vision analysis error: {e}"
 
 
 def read_pdf_files(input_dir: str) -> list[dict]:
@@ -261,7 +261,7 @@ def read_pdf_files(input_dir: str) -> list[dict]:
     try:
         import pypdf
     except ImportError:
-        print("  ⚠️  pypdf non installato - PDF non supportati. Installa: pip install pypdf")
+        print("  ⚠️  pypdf not installed - PDFs not supported. Install: pip install pypdf")
         return texts
     
     for file_path in input_path.glob("*.pdf"):
@@ -276,7 +276,7 @@ def read_pdf_files(input_dir: str) -> list[dict]:
                 "filename": file_path.name,
                 "content": content.strip()
             })
-            print(f"  Loaded PDF: {file_path.name} ({len(reader.pages)} pagine)")
+            print(f"  Loaded PDF: {file_path.name} ({len(reader.pages)} pages)")
         except Exception as e:
             print(f"  Warning: Could not read {file_path.name}: {e}")
     
@@ -291,7 +291,7 @@ def read_docx_files(input_dir: str) -> list[dict]:
     try:
         import docx
     except ImportError:
-        print("  ⚠️  python-docx non installato - DOCX non supportati. Installa: pip install python-docx")
+        print("  ⚠️  python-docx not installed - DOCXs not supported. Install: pip install python-docx")
         return texts
     
     for file_path in input_path.glob("*.docx"):
@@ -328,7 +328,7 @@ def process_screenshots(input_dir: str, use_vision: bool = True) -> list[dict]:
     for ext in ["*.png", "*.jpg", "*.jpeg", "*.webp"]:
         for file_path in input_path.glob(ext):
             try:
-                # Determina mime type dal suffisso reale del file (non dal glob pattern)
+                # Determine mime type from actual file suffix (not glob pattern)
                 suffix = file_path.suffix.lstrip(".").lower()
                 if suffix == "jpg" or suffix == "jpeg":
                     mime_type = "image/jpeg"
@@ -353,7 +353,7 @@ def process_screenshots(input_dir: str, use_vision: bool = True) -> list[dict]:
                     analysis = analyze_screenshot_with_vision(str(file_path), mime_type)
                     screenshot["analysis"] = analysis
                 else:
-                    screenshot["analysis"] = "⚠️  Vision non disponibile (LLM_API_KEY non settato)"
+                    screenshot["analysis"] = "⚠️  Vision unavailable (LLM_API_KEY not set)"
                 
                 screenshots.append(screenshot)
                 print(f"  ✓ Processed: {file_path.name}")
@@ -389,7 +389,7 @@ It serves as the "Bible" for the functional analysis agents.
 """)
     
     # Section 1: Business Rules (from text files, PDF, DOCX)
-    sections.append("""## 1. Regole di Business (Estratte dalle note)
+    sections.append("""## 1. Business Rules (Extracted from Notes)
 
 """)
     
@@ -399,12 +399,12 @@ It serves as the "Bible" for the functional analysis agents.
             sections.append(f"### [{type_label}] {text['filename']}\n")
             sections.append(f"```\n{text['content']}\n```\n\n")
     else:
-        sections.append("*Nessun file di testo trovato.*\n\n")
+        sections.append("*No text files found.*\n\n")
     
     sections.append("---\n\n")
     
     # Section 2: UI Inventory (from HTML)
-    sections.append("""## 2. Inventario UI (Estratto da HTML)
+    sections.append("""## 2. UI Inventory (Extracted from HTML)
 
 """)
     
@@ -412,7 +412,7 @@ It serves as the "Bible" for the functional analysis agents.
         for html in html_structures:
             structure = html["structure"]
             sections.append(f"### File: {structure['filename']}\n")
-            sections.append(f"**Titolo:** {structure['title']}\n\n")
+            sections.append(f"**Title:** {structure['title']}\n\n")
             
             if structure["forms"]:
                 sections.append("#### Forms\n")
@@ -455,11 +455,11 @@ It serves as the "Bible" for the functional analysis agents.
             
             sections.append("---\n\n")
     else:
-        sections.append("*Nessun file HTML trovato.*\n\n")
+        sections.append("*No HTML files found.*\n\n")
         sections.append("---\n\n")
     
     # Section 3: Screenshots (with Vision analysis)
-    sections.append("""## 3. Screenshots UI (Analizzati con Vision)
+    sections.append("""## 3. Screenshots UI (Analyzed with Vision)
 
 """)
     
@@ -469,17 +469,17 @@ It serves as the "Bible" for the functional analysis agents.
             if ss.get("analysis"):
                 sections.append(f"{ss['analysis']}\n\n")
             else:
-                sections.append("*Analisi non disponibile*\n\n")
+                sections.append("*Analysis unavailable*\n\n")
             sections.append("---\n\n")
     else:
-        sections.append("*Nessuno screenshot trovato.*\n\n")
+        sections.append("*No screenshots found.*\n\n")
     
     sections.append("---\n\n")
     
     # Section 4: Data Model Inference
-    sections.append("""## 4. Modello Dati (Inferito)
+    sections.append("""## 4. Data Model (Inferred)
 
-Basato sull'analisi dei form e degli input HTML:
+Based on analysis of HTML forms and inputs:
 
 """)
     
@@ -501,7 +501,7 @@ Basato sull'analisi dei form e degli input HTML:
                     inferred_fields[key]["patterns"].add(field["pattern"])
     
     if inferred_fields:
-        sections.append("| Campo | Tipo | Required | Pattern |\n")
+        sections.append("| Field | Type | Required | Pattern |\n")
         sections.append("|-------|------|----------|--------|\n")
         for field_name, info in sorted(inferred_fields.items()):
             types = ", ".join(sorted(info["types"]))
@@ -510,14 +510,14 @@ Basato sull'analisi dei form e degli input HTML:
             sections.append(f"| `{field_name}` | {types} | {required} | {patterns} |\n")
         sections.append("\n")
     else:
-        sections.append("*Nessun campo dati inferito dai form HTML.*\n\n")
+        sections.append("*No data fields inferred from HTML forms.*\n\n")
     
     sections.append("---\n\n")
     
     # Section 5: API Endpoints (inferred)
-    sections.append("""## 5. Endpoint API (Inferiti)
+    sections.append("""## 5. API Endpoints (Inferred)
 
-Basato sull'analisi delle action dei form:
+Based on analysis of form actions:
 
 """)
     
@@ -537,29 +537,29 @@ Basato sull'analisi delle action dei form:
             sections.append(f"| `{endpoint}` | {method} |\n")
         sections.append("\n")
     else:
-        sections.append("*Nessun endpoint API inferito.*\n\n")
+        sections.append("*No API endpoints inferred.*\n\n")
     
     sections.append("---\n\n")
     
     # Section 6: Notes for Agent
-    sections.append("""## 6. Note per l'Agente Analista
+    sections.append("""## 6. Notes for the Analyst Agent
 
-Questo contesto è stato generato automaticamente. Utilizzalo come base per:
+This context was automatically generated. Use it as a base for:
 
-1. **Generare i flussi utente** (User Journey)
-2. **Definire gli stati dell'applicazione** (State Machine)
-3. **Identificare gli edge case** (gestione errori, stati limite)
-4. **Creare diagrammi Mermaid** (Flowchart, Sequence Diagram)
-5. **Generare configurazione XState** eseguibile
+1. **Generate user flows** (User Journey)
+2. **Define application states** (State Machine)
+3. **Identify edge cases** (error handling, boundary states)
+4. **Create Mermaid diagrams** (Flowchart, Sequence Diagram)
+5. **Generate executable XState configuration**
 
-### Checklist per l'analisi:
-- [ ] Ogni form ha uno stato di caricamento definito?
-- [ ] Ogni chiamata API ha gestione errori 4xx e 5xx?
-- [ ] C'è un modo per annullare ogni operazione intermedia?
-- [ ] Cosa succede se l'utente perde la connessione?
-- [ ] Cosa succede se l'utente preme "indietro" nel browser?
-- [ ] Gli stati di errore mostrano messaggi chiari all'utente?
-- [ ] C'è un modo per recuperare da uno stato di errore?
+### Analysis Checklist:
+- [ ] Does every form have a defined loading state?
+- [ ] Does every API call have 4xx and 5xx error handling?
+- [ ] Is there a way to cancel every intermediate operation?
+- [ ] What happens if the user loses connection?
+- [ ] What happens if the user presses "back" in the browser?
+- [ ] Do error states show clear messages to the user?
+- [ ] Is there a way to recover from an error state?
 
 """)
     

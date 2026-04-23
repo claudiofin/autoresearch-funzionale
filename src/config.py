@@ -1,9 +1,9 @@
 """
-Configurazione centrale per il sistema di analisi funzionale.
+Central configuration for the functional analysis system.
 
 LLM Provider Configuration:
     - Default: OpenAI (gpt-4o)
-    - Supportati: openai, anthropic, google, dashscope
+    - Supported: openai, anthropic, google, dashscope
     - Override: env vars LLM_BASE_URL, LLM_MODEL
 
 Usage:
@@ -41,7 +41,7 @@ LLM_CONFIG = {
     },
 }
 
-# Provider di default
+# Default provider
 DEFAULT_PROVIDER = "openai"
 
 # ---------------------------------------------------------------------------
@@ -49,7 +49,7 @@ DEFAULT_PROVIDER = "openai"
 # ---------------------------------------------------------------------------
 
 DEFAULT_MAX_ITERATIONS = 10
-DEFAULT_TIME_BUDGET = 1200  # 20 minuti
+DEFAULT_TIME_BUDGET = 1200  # 20 minutes
 OUTPUT_DIR = "./output"
 DEFAULT_CHECKPOINT_DIR = "./output/loop_checkpoints"
 FORCE_ALL_ITERATIONS = False

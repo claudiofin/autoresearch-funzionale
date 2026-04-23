@@ -1,19 +1,19 @@
 """
-Loop autonomo per analisi funzionale automatica.
+Autonomous loop for automatic functional analysis.
 
-Coordina il flusso:
+Coordinates the flow:
   Ingest → Analyst → Spec → Validator → Fuzzer → Critic → Analyst → ...
 
-Criteri di stop:
-  - Quality Score 100/100 (macchina perfetta)
-  - Quality Score ≥ 90 E 0 critical issues (qualità sufficiente)
-  - Convergenza: Quality Score non migliora per 2 iterazioni consecutive
-  - Max iterazioni raggiunte
-  - Timeout raggiunto
+Stop criteria:
+  - Quality Score 100/100 (perfect machine)
+  - Quality Score ≥ 90 AND 0 critical issues (sufficient quality)
+  - Convergence: Quality Score doesn't improve for 2 consecutive iterations
+  - Max iterations reached
+  - Timeout reached
 
 Usage:
     python loop.py --context project_context.md --max-iterations 5 --time-budget 600
-    python loop.py --input-dir inputs/ --max-iterations 5  # con ingest automatico
+    python loop.py --input-dir inputs/ --max-iterations 5  # with automatic ingest
 """
 
 import os
@@ -31,15 +31,15 @@ from typing import Dict, List, Optional
 # ---------------------------------------------------------------------------
 
 DEFAULT_MAX_ITERATIONS = 10
-DEFAULT_TIME_BUDGET = 1200  # 20 minuti
+DEFAULT_TIME_BUDGET = 1200  # 20 minutes
 OUTPUT_DIR = "./output"
 CONTEXT_DIR = "./output/context"
 ANALYST_DIR = "./output/analyst"
 SPEC_DIR = "./output/spec"
 DEFAULT_CHECKPOINT_DIR = "./output/loop_checkpoints"
-FORCE_ALL_ITERATIONS = False  # Se True, forza tutte le iterazioni anche senza errori
+FORCE_ALL_ITERATIONS = False  # If True, forces all iterations even without errors
 
-# Directory degli script (src/ se eseguito dalla root, . se eseguito da src/)
+# Script directory (src/ if run from root, . if run from src/)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # ---------------------------------------------------------------------------
 
 class AutonomousLoop:
-    """Coordina il loop autonomo di analisi funzionale."""
+    """Coordinates the autonomous functional analysis loop."""
     
     def __init__(
         self,
@@ -63,15 +63,15 @@ class AutonomousLoop:
         self.time_budget = time_budget
         self.checkpoint_dir = checkpoint_dir
         self.force_iterations = force_iterations
-        self.input_dir = input_dir  # Se fornito, esegue ingest all'inizio
-        self.generate_ui = generate_ui  # Se True, genera UI specs alla fine
+        self.input_dir = input_dir  # If provided, runs ingest at start
+        self.generate_ui = generate_ui  # If True, generates UI specs at end
         
         # Output files (organized in subfolders)
         if input_dir:
-            # Con ingest automatico, il contesto va in output/context/
+            # With automatic ingest, context goes to output/context/
             self.context_file = os.path.join(CONTEXT_DIR, "project_context.md")
         else:
-            # Contesto fornito dall'utente, usa il percorso dato
+            # Context provided by user, uses given path
             self.context_file = context_file
         self.analyst_output = os.path.join(ANALYST_DIR, "analyst_suggestions.json")
         self.spec_output = os.path.join(SPEC_DIR, "spec.md")
@@ -84,7 +84,7 @@ class AutonomousLoop:
         self.iteration = 0
         self.start_time = None
         self.history = []
-        self.quality_history = []  # Traccia Quality Score per convergenza
+        self.quality_history = []  # Track Quality Score for convergence
         
         # Create output directories
         os.makedirs(checkpoint_dir, exist_ok=True)
@@ -93,21 +93,21 @@ class AutonomousLoop:
         os.makedirs(SPEC_DIR, exist_ok=True)
     
     def run(self) -> dict:
-        """Esegue il loop autonomo completo."""
+        """Runs the complete autonomous loop."""
         
         self.start_time = time.time()
         
         print("=" * 60)
-        print("LOOP AUTONOMO - Analisi Funzionale Automatica")
+        print("AUTONOMOUS LOOP - Automatic Functional Analysis")
         print("=" * 60)
-        print(f"Contesto: {self.context_file}")
-        print(f"Max iterazioni: {self.max_iterations}")
+        print(f"Context: {self.context_file}")
+        print(f"Max iterations: {self.max_iterations}")
         print(f"Time budget: {self.time_budget}s")
         if self.input_dir:
-            print(f"Input dir: {self.input_dir} (ingest automatico)")
+            print(f"Input dir: {self.input_dir} (automatic ingest)")
         print()
         
-        # Step 0: Ingest (se input_dir fornito e contesto non esiste)
+        # Step 0: Ingest (if input_dir provided and context doesn't exist)
         if self.input_dir:
             self._run_ingest()
         
@@ -115,69 +115,69 @@ class AutonomousLoop:
             self.iteration += 1
             print()
             print("=" * 60)
-            print(f"ITERAZIONE {self.iteration}/{self.max_iterations}")
+            print(f"ITERATION {self.iteration}/{self.max_iterations}")
             print("=" * 60)
             
-            # Esegui step del loop
+            # Run loop step
             step_result = self._run_iteration()
             self.history.append(step_result)
             
-            # Salva checkpoint
+            # Save checkpoint
             self._save_checkpoint(step_result)
             
-            # Check se completato
+            # Check if completed
             if step_result.get("completed"):
                 print()
-                print("🎉 Loop completato con successo!")
+                print("🎉 Loop completed successfully!")
                 break
         
-        # Step finale: UI Generator (se richiesto)
+        # Final step: UI Generator (if requested)
         if self.generate_ui:
             print()
             print("=" * 60)
-            print("🎨 GENERAZIONE UI SPECS")
+            print("🎨 UI SPECS GENERATION")
             print("=" * 60)
             self._run_ui_generator()
         
-        # Report finale
+        # Final report
         return self._generate_report()
     
     def _should_continue(self) -> bool:
-        """Controlla se il loop dovrebbe continuare."""
+        """Checks if the loop should continue."""
         
         # Check iterations
         if self.iteration >= self.max_iterations:
-            print(f"\n⏹️  Raggiunte max {self.max_iterations} iterazioni")
+            print(f"\n⏹️  Reached max {self.max_iterations} iterations")
             return False
         
         # Check time budget
         elapsed = time.time() - self.start_time
         if elapsed > self.time_budget:
-            print(f"\n⏹️  Raggiunto time budget ({elapsed:.0f}s > {self.time_budget}s)")
+            print(f"\n⏹️  Reached time budget ({elapsed:.0f}s > {self.time_budget}s)")
             return False
         
         # Check quality-based stop criteria (skip if force_iterations)
         if not self.force_iterations and len(self.quality_history) >= 1:
             latest_quality = self.quality_history[-1]
             
-            # Criterio 1: Quality Score 100/100 → STOP immediato
+            # Criterion 1: Quality Score 100/100 → immediate STOP
             if latest_quality == 100:
-                print(f"\n🎉 Quality Score 100/100 raggiunto! Loop completato.")
+                print(f"\n🎉 Quality Score 100/100 reached! Loop completed.")
                 return False
             
-            # Criterio 2: Convergenza - stesso score per 2 iterazioni consecutive
+            # Criterion 2: Convergence - same score for 2 consecutive iterations
             if len(self.quality_history) >= 2:
                 prev_quality = self.quality_history[-2]
                 if latest_quality == prev_quality and latest_quality >= 80:
-                    print(f"\n🎯 Convergenza raggiunta: Quality Score {latest_quality}/100 stabile per 2 iterazioni.")
+                    print(f"\n🎯 Convergence reached: Quality Score {latest_quality}/100 stable for 2 iterations.")
                     return False
         
         return True
     
     def _check_quality_stop(self, validator_result: dict, critic_result: dict) -> bool:
-        """Check se fermare il loop basandosi su Quality Score e critical issues.
+        """Check if loop should stop based on Quality Score and critical issues.
         
-        Restituisce True se il loop dovrebbe fermarsi.
+        Returns True if loop should stop.
         """
         if self.force_iterations:
             return False
@@ -186,20 +186,20 @@ class AutonomousLoop:
         critical_issues = critic_result.get("critical_issues", 0)
         
         if quality_score is not None:
-            # Criterio 1: Quality Score 100/100 → STOP
+            # Criterion 1: Quality Score 100/100 → STOP
             if quality_score == 100:
-                print(f"\n🎉 Quality Score 100/100! Macchina perfetta.")
+                print(f"\n🎉 Quality Score 100/100! Perfect machine.")
                 return True
             
-            # Criterio 2: Quality ≥ 90 E 0 critical issues → STOP
+            # Criterion 2: Quality ≥ 90 AND 0 critical issues → STOP
             if quality_score >= 90 and critical_issues == 0:
-                print(f"\n✅ Quality Score {quality_score}/100 con 0 critical issues. Qualità sufficiente.")
+                print(f"\n✅ Quality Score {quality_score}/100 with 0 critical issues. Sufficient quality.")
                 return True
         
         return False
     
     def _run_iteration(self) -> dict:
-        """Esegue una singola iterazione del loop."""
+        """Runs a single iteration of the loop."""
         
         iteration_start = time.time()
         result = {
@@ -209,7 +209,7 @@ class AutonomousLoop:
             "completed": False
         }
         
-        # Step 1: Analyst (ad OGNI iterazione - non solo alla prima)
+        # Step 1: Analyst (at EVERY iteration - not just the first)
         print("\n📊 Step 1: Analyst...")
         analyst_result = self._run_analyst()
         result["steps"]["analyst"] = analyst_result
@@ -233,13 +233,13 @@ class AutonomousLoop:
             score = validator_result["quality_score"]
             dead_ends = validator_result.get("dead_end_count", 0)
             print(f"  Quality Score: {score}/100, Dead-end states: {dead_ends}")
-            # Traccia Quality Score per convergenza
+            # Track Quality Score for convergence
             self.quality_history.append(score)
             if dead_ends > 0:
                 result["warnings"] = result.get("warnings", []) + [f"{dead_ends} dead-end states found"]
         
         # Step 3: Fuzzer
-        print("\n🔍 Step 4: Fuzzer...")
+        print("\n🔍 Step 3: Fuzzer...")
         fuzz_result = self._run_fuzzer()
         result["steps"]["fuzzer"] = fuzz_result
         if fuzz_result.get("error"):
@@ -252,14 +252,14 @@ class AutonomousLoop:
         if critic_result.get("error"):
             result["errors"].append(f"Critic: {critic_result['error']}")
         
-        # Check quality-based stop criteria (dopo validator + critic)
+        # Check quality-based stop criteria (after validator + critic)
         if not self.force_iterations:
-            # Prima check quality score e critical issues
+            # First check quality score and critical issues
             if self._check_quality_stop(validator_result, critic_result):
                 result["completed"] = True
-                print("\n✅ Qualità sufficiente - Loop completato!")
+                print("\n✅ Sufficient quality - Loop completed!")
             else:
-                # Check se ci sono problemi strutturali dal validator
+                # Check if there are structural issues from validator
                 has_structural_issues = (
                     validator_result.get("dead_end_count", 0) > 0 or
                     validator_result.get("unreachable_count", 0) > 0 or
@@ -268,24 +268,24 @@ class AutonomousLoop:
                 
                 critical_errors = critic_result.get("critical_issues", 0)
                 
-                # Non fermare se ci sono problemi strutturali O critical issues
+                # Don't stop if there are structural issues OR critical errors
                 if not has_structural_issues and critical_errors == 0 and not result["errors"]:
                     result["completed"] = True
-                    print("\n✅ Nessun errore critico - Loop completato!")
+                    print("\n✅ No critical errors - Loop completed!")
                 elif has_structural_issues:
-                    print(f"\n⚠️  Problemi strutturali rilevati - continuo iterazione...")
+                    print(f"\n⚠️  Structural issues detected - continuing iteration...")
         else:
-            print(f"\n🔄 Iterazione {self.iteration}/{self.max_iterations} completata (force mode)")
+            print(f"\n🔄 Iteration {self.iteration}/{self.max_iterations} completed (force mode)")
         
         # Summary
         elapsed = time.time() - iteration_start
         result["elapsed_seconds"] = elapsed
-        print(f"\n⏱️  Iterazione completata in {elapsed:.1f}s")
+        print(f"\n⏱️  Iteration completed in {elapsed:.1f}s")
         
         return result
     
     def _run_ingest(self) -> dict:
-        """Esegue l'Ingest per generare il contesto dagli input."""
+        """Runs Ingest to generate context from inputs."""
         try:
             env = os.environ.copy()
             script = os.path.join(SCRIPT_DIR, "ingest.py")
@@ -305,7 +305,7 @@ class AutonomousLoop:
             if os.path.exists(self.context_file):
                 return {"success": True, "output": self.context_file}
             
-            return {"error": "Ingest non ha prodotto output"}
+            return {"error": "Ingest did not produce output"}
             
         except subprocess.TimeoutExpired:
             return {"error": "Ingest timeout"}
@@ -313,15 +313,15 @@ class AutonomousLoop:
             return {"error": str(e)}
     
     def _run_analyst(self) -> dict:
-        """Esegue l'Analyst."""
+        """Runs the Analyst."""
         try:
             env = os.environ.copy()
             script = os.path.join(SCRIPT_DIR, "analyst.py")
             
-            # Costruisci argomenti: passa anche il feedback del critic se esiste
+            # Build arguments: also pass critic feedback if exists
             args = ["python3", script, "--context", self.context_file]
             
-            # Se esiste un feedback del critic dalle iterazioni precedenti, passalo all'analista
+            # If critic feedback exists from previous iterations, pass it to the analyst
             if os.path.exists(self.critic_feedback):
                 args.extend(["--critic-feedback", self.critic_feedback])
             
@@ -356,23 +356,23 @@ class AutonomousLoop:
             return {"error": str(e)}
     
     def _run_spec(self) -> dict:
-        """Esegue la generazione della spec (approccio iterativo)."""
+        """Runs spec generation (iterative approach)."""
         try:
             env = os.environ.copy()
             script = os.path.join(SCRIPT_DIR, "spec.py")
             
-            # Costruisci argomenti: passa tutto per approccio iterativo
+            # Build arguments: pass everything for iterative approach
             args = ["python3", script, "--context", self.context_file]
             
-            # Suggerimenti dell'analista
+            # Analyst suggestions
             if os.path.exists(self.analyst_output):
                 args.extend(["--suggestions", self.analyst_output])
             
-            # Macchina esistente (per iterazioni successive)
+            # Existing machine (for subsequent iterations)
             if os.path.exists(self.spec_machine):
                 args.extend(["--machine", self.spec_machine])
             
-            # Critic feedback (per correggere issues)
+            # Critic feedback (to fix issues)
             if os.path.exists(self.critic_feedback):
                 args.extend(["--critic-feedback", self.critic_feedback])
             
@@ -408,7 +408,7 @@ class AutonomousLoop:
             return {"error": str(e)}
     
     def _run_validator(self) -> dict:
-        """Esegue il validatore della macchina a stati."""
+        """Runs the state machine validator."""
         try:
             env = os.environ.copy()
             script = os.path.join(SCRIPT_DIR, "validator.py")
@@ -425,7 +425,7 @@ class AutonomousLoop:
                     if line.strip():
                         print(f"  {line}")
             
-            # Parse output per estrarre metriche
+            # Parse output to extract metrics
             output_text = result.stdout or ""
             quality_score = None
             dead_end_count = 0
@@ -443,12 +443,12 @@ class AutonomousLoop:
                         dead_end_count = int(line.split("(")[1].split(")")[0])
                     except:
                         pass
-                if "STATI NON RAGGIUNGIBILI" in line:
+                if "UNREACHABLE STATES" in line:
                     try:
                         unreachable_count = int(line.split("(")[1].split(")")[0])
                     except:
                         pass
-                if "CICLI INFINITI" in line:
+                if "INFINITE LOOPS" in line:
                     try:
                         cycle_count = int(line.split("(")[1].split(")")[0])
                     except:
@@ -469,7 +469,7 @@ class AutonomousLoop:
             return {"error": str(e)}
     
     def _run_fuzzer(self) -> dict:
-        """Esegue il Fuzzer."""
+        """Runs the Fuzzer."""
         try:
             env = os.environ.copy()
             script = os.path.join(SCRIPT_DIR, "fuzzer.py")
@@ -481,7 +481,7 @@ class AutonomousLoop:
                 env=env
             )
             
-            # Parse del report
+            # Parse report
             if os.path.exists(self.fuzz_report):
                 with open(self.fuzz_report, "r") as f:
                     data = json.load(f)
@@ -501,7 +501,7 @@ class AutonomousLoop:
             return {"error": str(e)}
     
     def _run_ui_generator(self) -> dict:
-        """Esegue il UI Generator per creare specifiche UI dalla macchina a stati."""
+        """Runs the UI Generator to create UI specs from the state machine."""
         try:
             env = os.environ.copy()
             script = os.path.join(SCRIPT_DIR, "ui_generator.py")
@@ -524,11 +524,11 @@ class AutonomousLoop:
                         print(f"  {line}")
             
             if result.returncode == 0:
-                print(f"\n  ✅ UI specs generate in {ui_output_dir}/")
-                print(f"     Apri {ui_output_dir}/README.md per navigare.")
+                print(f"\n  ✅ UI specs generated in {ui_output_dir}/")
+                print(f"     Open {ui_output_dir}/README.md to navigate.")
                 return {"success": True, "output_dir": ui_output_dir}
             else:
-                print(f"\n  ⚠️  UI Generator ha restituito errore: {result.returncode}")
+                print(f"\n  ⚠️  UI Generator returned error: {result.returncode}")
                 return {"error": f"Exit code {result.returncode}"}
             
         except subprocess.TimeoutExpired:
@@ -537,7 +537,7 @@ class AutonomousLoop:
             return {"error": str(e)}
     
     def _run_critic(self) -> dict:
-        """Esegue il Critic."""
+        """Runs the Critic."""
         try:
             env = os.environ.copy()
             script = os.path.join(SCRIPT_DIR, "critic.py")
@@ -552,11 +552,11 @@ class AutonomousLoop:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=120,  # Aumentato per LLM con contesto
+                timeout=120,  # Increased for LLM with context
                 env=env
             )
             
-            # Parse del feedback
+            # Parse feedback
             if os.path.exists(self.critic_feedback):
                 with open(self.critic_feedback, "r") as f:
                     data = json.load(f)
@@ -577,7 +577,7 @@ class AutonomousLoop:
             return {"error": str(e)}
     
     def _save_checkpoint(self, result: dict):
-        """Salva un checkpoint dell'iterazione."""
+        """Saves an iteration checkpoint."""
         checkpoint_file = os.path.join(
             self.checkpoint_dir, 
             f"checkpoint_iter_{self.iteration:03d}.json"
@@ -594,11 +594,11 @@ class AutonomousLoop:
             json.dump(checkpoint_data, f, indent=2)
     
     def _generate_report(self) -> dict:
-        """Genera il report finale del loop."""
+        """Generates the final loop report."""
         
         elapsed = time.time() - self.start_time
         
-        # Calcola statistiche
+        # Calculate statistics
         total_errors = sum(
             r.get("steps", {}).get("fuzzer", {}).get("errors", 0)
             for r in self.history
@@ -628,7 +628,7 @@ class AutonomousLoop:
             }
         }
         
-        # Salva report
+        # Save report
         report_file = os.path.join(self.checkpoint_dir, "final_report.json")
         with open(report_file, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
@@ -641,33 +641,33 @@ class AutonomousLoop:
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Loop autonomo per analisi funzionale")
+    parser = argparse.ArgumentParser(description="Autonomous loop for functional analysis")
     parser.add_argument("--context", type=str, default="project_context.md",
-                        help="File di contesto da analizzare")
+                        help="Context file to analyze")
     parser.add_argument("--input-dir", type=str, default=None,
-                        help="Directory input (se fornito, esegue ingest automatico)")
+                        help="Input directory (if provided, runs automatic ingest)")
     parser.add_argument("--max-iterations", type=int, default=DEFAULT_MAX_ITERATIONS,
-                        help=f"Max iterazioni (default: {DEFAULT_MAX_ITERATIONS})")
+                        help=f"Max iterations (default: {DEFAULT_MAX_ITERATIONS})")
     parser.add_argument("--time-budget", type=int, default=DEFAULT_TIME_BUDGET,
-                        help=f"Time budget in secondi (default: {DEFAULT_TIME_BUDGET})")
+                        help=f"Time budget in seconds (default: {DEFAULT_TIME_BUDGET})")
     parser.add_argument("--checkpoint-dir", type=str, default=DEFAULT_CHECKPOINT_DIR,
-                        help=f"Directory per checkpoint (default: {DEFAULT_CHECKPOINT_DIR})")
+                        help=f"Checkpoint directory (default: {DEFAULT_CHECKPOINT_DIR})")
     parser.add_argument("--force", action="store_true",
-                        help="Forza tutte le iterazioni anche senza errori critici")
+                        help="Force all iterations even without critical errors")
     parser.add_argument("--generate-ui", action="store_true",
-                        help="Genera specifiche UI dalla macchina a stati (al termine del loop)")
+                        help="Generate UI specs from state machine (at end of loop)")
     args = parser.parse_args()
     
-    # Se input-dir è fornito, non serve che il contesto esista già
+    # If input-dir is provided, context doesn't need to exist yet
     if args.input_dir and not os.path.exists(args.input_dir):
-        print(f"Errore: Directory input non trovata: {args.input_dir}")
+        print(f"Error: Input directory not found: {args.input_dir}")
         sys.exit(1)
     
-    # Se non c'è input-dir, il contesto deve esistere
+    # If no input-dir, context must exist
     if not args.input_dir and not os.path.exists(args.context):
-        print(f"Errore: File di contesto non trovato: {args.context}")
-        print("Esegui prima 'python ingest.py' per generare project_context.md")
-        print("Oppure usa --input-dir per eseguire ingest automatico")
+        print(f"Error: Context file not found: {args.context}")
+        print("Run 'python ingest.py' first to generate project_context.md")
+        print("Or use --input-dir to run automatic ingest")
         sys.exit(1)
     
     # Run loop
@@ -683,16 +683,16 @@ def main():
     
     report = loop.run()
     
-    # Stampa report finale
+    # Print final report
     print()
     print("=" * 60)
-    print("REPORT FINALE")
+    print("FINAL REPORT")
     print("=" * 60)
-    print(f"Completato:       {report['completed']}")
-    print(f"Iterazioni:       {report['iterations_run']}/{report['max_iterations']}")
-    print(f"Tempo totale:     {report['elapsed_seconds']:.1f}s")
-    print(f"Errori finali:    {report['final_errors']}")
-    print(f"Warning finali:   {report['final_warnings']}")
+    print(f"Completed:       {report['completed']}")
+    print(f"Iterations:      {report['iterations_run']}/{report['max_iterations']}")
+    print(f"Total time:      {report['elapsed_seconds']:.1f}s")
+    print(f"Final errors:    {report['final_errors']}")
+    print(f"Final warnings:  {report['final_warnings']}")
     print()
     print(f"Checkpoint: {args.checkpoint_dir}/")
     print(f"Report:     {args.checkpoint_dir}/final_report.json")

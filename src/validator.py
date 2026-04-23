@@ -1,11 +1,11 @@
 """
-Validatore automatico della macchina a stati XState.
+Automatic XState state machine validator.
 
-Rileva:
-- Dead-end states (stati senza transizioni in uscita)
-- Stati non raggiungibili dallo stato iniziale
-- Transizioni a stati non definiti
-- Cicli infiniti potenziali
+Detects:
+- Dead-end states (states without exit transitions)
+- Unreachable states from initial state
+- Transitions to undefined states
+- Potential infinite loops
 
 Usage:
     python src/validator.py --machine output/spec/spec_machine.json
@@ -19,31 +19,31 @@ from collections import deque
 
 
 def load_machine(machine_file: str) -> dict:
-    """Carica la macchina a stati dal file JSON."""
+    """Load state machine from JSON file."""
     with open(machine_file, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def find_dead_end_states(machine: dict) -> list[dict]:
-    """Trova stati senza transizioni in uscita (tranne stati finali)."""
+    """Find states without exit transitions (except final states)."""
     dead_ends = []
     states = machine.get("states", {})
     
-    # Stati che possono essere finali (per convenzione)
+    # States that can be final (by convention)
     final_keywords = ["success", "ready", "complete", "done", "finished"]
     
     for state_name, state_config in states.items():
         transitions = state_config.get("on", {})
         
         if not transitions:
-            # Verifica se è uno stato finale legittimo
+            # Check if it's a legitimate final state
             is_final = any(kw in state_name.lower() for kw in final_keywords)
             
             if not is_final:
                 dead_ends.append({
                     "state": state_name,
                     "issue": "NO_EXIT_TRANSITIONS",
-                    "description": f"Stato '{state_name}' non ha transizioni in uscita. L'utente resta bloccato.",
+                    "description": f"State '{state_name}' has no exit transitions. User gets stuck.",
                     "suggestion": _suggest_exit_transitions(state_name)
                 })
     
@@ -51,32 +51,32 @@ def find_dead_end_states(machine: dict) -> list[dict]:
 
 
 def _suggest_exit_transitions(state_name: str) -> str:
-    """Suggerisce transizioni di uscita basate sul nome dello stato."""
+    """Suggest exit transitions based on state name."""
     name = state_name.lower()
     
     if "error" in name or "fail" in name:
-        return "Aggiungi: RIPROVA → stato di loading, ANNULLA → stato iniziale"
+        return "Add: RETRY → loading state, CANCEL → initial state"
     elif "loading" in name:
-        return "Aggiungi: ANNULLA → stato precedente, TIMEOUT → stato errore"
-    elif "empty" in name or "vuoto" in name:
-        return "Aggiungi: AGGIORNA → stato di loading, TORNA_INDIETRO → stato iniziale"
+        return "Add: CANCEL → previous state, TIMEOUT → error state"
+    elif "empty" in name:
+        return "Add: REFRESH → loading state, GO_BACK → initial state"
     elif "timeout" in name:
-        return "Aggiungi: RIPROVA → stato di loading, ANNULLA → stato iniziale"
+        return "Add: RETRY → loading state, CANCEL → initial state"
     elif "session" in name or "auth" in name:
-        return "Aggiungi: RIAUTENTICAZIONE → stato di loading, ESCI → stato iniziale"
+        return "Add: REAUTHENTICATE → loading state, EXIT → initial state"
     else:
-        return "Aggiungi almeno una transizione di uscita appropriata"
+        return "Add at least one appropriate exit transition"
 
 
 def find_unreachable_states(machine: dict) -> list[dict]:
-    """Trova stati non raggiungibili dallo stato iniziale."""
+    """Find states unreachable from initial state."""
     states = machine.get("states", {})
     initial = machine.get("initial", "")
     
     if not initial or initial not in states:
-        return [{"issue": "INVALID_INITIAL", "description": f"Stato iniziale '{initial}' non trovato"}]
+        return [{"issue": "INVALID_INITIAL", "description": f"Initial state '{initial}' not found"}]
     
-    # BFS per trovare tutti gli stati raggiungibili
+    # BFS to find all reachable states
     reachable = set()
     queue = deque([initial])
     reachable.add(initial)
@@ -98,14 +98,14 @@ def find_unreachable_states(machine: dict) -> list[dict]:
             unreachable.append({
                 "state": state_name,
                 "issue": "UNREACHABLE",
-                "description": f"Stato '{state_name}' non è raggiungibile dallo stato iniziale '{initial}'"
+                "description": f"State '{state_name}' is not reachable from initial state '{initial}'"
             })
     
     return unreachable
 
 
 def find_invalid_transitions(machine: dict) -> list[dict]:
-    """Trova transizioni che puntano a stati non definiti."""
+    """Find transitions pointing to undefined states."""
     states = machine.get("states", {})
     invalid = []
     
@@ -121,14 +121,14 @@ def find_invalid_transitions(machine: dict) -> list[dict]:
                     "event": event,
                     "target": target,
                     "issue": "INVALID_TARGET",
-                    "description": f"Transizione '{event}' da '{state_name}' punta a '{target}' che non esiste"
+                    "description": f"Transition '{event}' from '{state_name}' points to '{target}' which does not exist"
                 })
     
     return invalid
 
 
 def find_potential_infinite_loops(machine: dict) -> list[dict]:
-    """Trova potenziali cicli infiniti (A→B→A senza uscita)."""
+    """Find potential infinite loops (A→B→A without exit)."""
     states = machine.get("states", {})
     loops = []
     
@@ -139,15 +139,15 @@ def find_potential_infinite_loops(machine: dict) -> list[dict]:
                 target = target.get("target", "")
             
             if target and target in states:
-                # Verifica se c'è una transizione inversa
+                # Check if there's a reverse transition
                 target_transitions = states[target].get("on", {})
                 for reverse_event, reverse_target in target_transitions.items():
                     if isinstance(reverse_target, dict):
                         reverse_target = reverse_target.get("target", "")
                     
                     if reverse_target == state_name:
-                        # Ciclo trovato: state_name ↔ target
-                        # Verifica se almeno uno dei due ha un'uscita
+                        # Cycle found: state_name ↔ target
+                        # Check if at least one of them has an exit
                         has_exit_from_source = len(transitions) > 1
                         has_exit_from_target = len(target_transitions) > 1
                         
@@ -155,14 +155,14 @@ def find_potential_infinite_loops(machine: dict) -> list[dict]:
                             loops.append({
                                 "cycle": [state_name, target],
                                 "issue": "POTENTIAL_INFINITE_LOOP",
-                                "description": f"Ciclo bidirezionale: {state_name} ↔ {target}. Uno dei due stati non ha altre uscite."
+                                "description": f"Bidirectional cycle: {state_name} ↔ {target}. One of the two states has no other exits."
                             })
     
     return loops
 
 
 def validate_machine(machine_file: str) -> dict:
-    """Esegue tutte le validazioni sulla macchina a stati."""
+    """Run all validations on the state machine."""
     machine = load_machine(machine_file)
     
     results = {
@@ -176,20 +176,20 @@ def validate_machine(machine_file: str) -> dict:
         "unreachable_states": find_unreachable_states(machine),
         "invalid_transitions": find_invalid_transitions(machine),
         "potential_loops": find_potential_infinite_loops(machine),
-        # Conteggi per loop.py
+        # Counts for loop.py
         "dead_end_count": 0,
         "unreachable_count": 0,
         "invalid_transition_count": 0,
         "cycle_count": 0,
     }
     
-    # Calcola contaggi
+    # Calculate counts
     results["dead_end_count"] = len(results["dead_end_states"])
     results["unreachable_count"] = len(results["unreachable_states"])
     results["invalid_transition_count"] = len(results["invalid_transitions"])
     results["cycle_count"] = len(results["potential_loops"])
     
-    # Calcola score di qualità
+    # Calculate quality score
     issues_count = (
         len(results["dead_end_states"]) +
         len(results["unreachable_states"]) +
@@ -212,16 +212,16 @@ def validate_machine(machine_file: str) -> dict:
 
 
 def print_report(results: dict):
-    """Stampa un report leggibile dei risultati."""
+    """Print a readable report of the results."""
     print("\n" + "=" * 60)
-    print("VALIDAZIONE MACCHINA A STATI")
+    print("STATE MACHINE VALIDATION")
     print("=" * 60)
     print(f"Machine ID:        {results['machine_id']}")
-    print(f"Stato iniziale:    {results['initial_state']}")
-    print(f"Stati totali:      {results['total_states']}")
-    print(f"Transizioni totali:{results['total_transitions']}")
+    print(f"Initial state:     {results['initial_state']}")
+    print(f"Total states:      {results['total_states']}")
+    print(f"Total transitions: {results['total_transitions']}")
     print(f"Quality Score:     {results['quality_score']}/100")
-    print(f"Valida:            {'✅ SÌ' if results['is_valid'] else '❌ NO'}")
+    print(f"Valid:             {'✅ YES' if results['is_valid'] else '❌ NO'}")
     
     # Dead-end states
     if results["dead_end_states"]:
@@ -232,20 +232,20 @@ def print_report(results: dict):
     
     # Unreachable states
     if results["unreachable_states"]:
-        print(f"\n⚠️  STATI NON RAGGIUNGIBILI ({len(results['unreachable_states'])}):")
+        print(f"\n⚠️  UNREACHABLE STATES ({len(results['unreachable_states'])}):")
         for issue in results["unreachable_states"]:
             state_name = issue.get('state', issue.get('issue', 'unknown'))
             print(f"  - {state_name}: {issue['description']}")
     
     # Invalid transitions
     if results["invalid_transitions"]:
-        print(f"\n❌ TRANSIZIONI INVALIDE ({len(results['invalid_transitions'])}):")
+        print(f"\n❌ INVALID TRANSITIONS ({len(results['invalid_transitions'])}):")
         for issue in results["invalid_transitions"]:
             print(f"  - {issue['description']}")
     
     # Potential loops
     if results["potential_loops"]:
-        print(f"\n⚠️  POTENZIALI CICLI INFINITI ({len(results['potential_loops'])}):")
+        print(f"\n⚠️  POTENTIAL INFINITE LOOPS ({len(results['potential_loops'])}):")
         for issue in results["potential_loops"]:
             print(f"  - {issue['description']}")
     
@@ -255,7 +255,7 @@ def print_report(results: dict):
         results["invalid_transitions"],
         results["potential_loops"]
     ]):
-        print("\n✅ Nessuna issue trovata. La macchina a stati è ben strutturata.")
+        print("\n✅ No issues found. The state machine is well structured.")
     
     print("=" * 60)
 
@@ -265,7 +265,7 @@ def print_report(results: dict):
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Valida macchina a stati XState")
+    parser = argparse.ArgumentParser(description="Validate XState state machine")
     parser.add_argument("--machine", type=str, default="output/spec/spec_machine.json",
                         help="XState machine JSON file")
     parser.add_argument("--output", type=str, default=None,
@@ -283,7 +283,7 @@ def main():
         os.makedirs(os.path.dirname(args.output) if os.path.dirname(args.output) else ".", exist_ok=True)
         with open(args.output, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
-        print(f"\n📄 Report salvato: {args.output}")
+        print(f"\n📄 Report saved: {args.output}")
     
     # Exit code based on validity
     sys.exit(0 if results["is_valid"] else 1)

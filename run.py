@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Wrapper script per eseguire i comandi del sistema di analisi funzionale.
+Wrapper script to execute commands for the automatic functional analysis system.
 
 Usage:
     python run.py loop --max-iterations 10
@@ -16,48 +16,48 @@ import argparse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 def main():
-    parser = argparse.ArgumentParser(description="Autoresearch - Analisi Funzionale Automatica")
-    subparsers = parser.add_subparsers(dest="command", help="Comando da eseguire")
+    parser = argparse.ArgumentParser(description="Autoresearch - Automatic Functional Analysis")
+    subparsers = parser.add_subparsers(dest="command", help="Command to execute")
     
     # loop command
-    loop_parser = subparsers.add_parser("loop", help="Esegui loop autonomo")
+    loop_parser = subparsers.add_parser("loop", help="Run autonomous loop")
     loop_parser.add_argument("--context", type=str, default="output/project_context.md")
     loop_parser.add_argument("--input-dir", type=str, default=None,
-                             help="Directory input (se fornito, esegue ingest automatico)")
+                             help="Input directory (if provided, runs automatic ingest)")
     loop_parser.add_argument("--max-iterations", type=int, default=10)
     loop_parser.add_argument("--time-budget", type=int, default=1200)
     loop_parser.add_argument("--force", action="store_true")
     
     # completeness command
-    comp_parser = subparsers.add_parser("completeness", help="Verifica completezza")
+    comp_parser = subparsers.add_parser("completeness", help="Check completeness")
     comp_parser.add_argument("--spec", type=str, default="output/spec.md")
     comp_parser.add_argument("--machine", type=str, default="output/spec_machine.json")
     comp_parser.add_argument("--context", type=str, default="output/project_context.md")
     comp_parser.add_argument("--fix", action="store_true")
     
     # fuzzer command
-    fuzz_parser = subparsers.add_parser("fuzzer", help="Esegui fuzzing")
+    fuzz_parser = subparsers.add_parser("fuzzer", help="Run fuzzing")
     fuzz_parser.add_argument("--machine", type=str, default="output/spec_machine.json")
     
     # critic command
-    critic_parser = subparsers.add_parser("critic", help="Esegui review critica")
+    critic_parser = subparsers.add_parser("critic", help="Run critical review")
     critic_parser.add_argument("--fuzz-report", type=str, default="output/fuzz_report.json")
     
     # spec command
-    spec_parser = subparsers.add_parser("spec", help="Genera specifica")
+    spec_parser = subparsers.add_parser("spec", help="Generate specification")
     spec_parser.add_argument("--context", type=str, default="output/project_context.md")
     
     # ingest command
-    ingest_parser = subparsers.add_parser("ingest", help="Processa input e genera contesto")
+    ingest_parser = subparsers.add_parser("ingest", help="Process inputs and generate context")
     ingest_parser.add_argument("--input-dir", type=str, default="inputs/")
     ingest_parser.add_argument("--output-file", type=str, default="output/project_context.md")
 
     # analyst command
-    analyst_parser = subparsers.add_parser("analyst", help="Analizza pattern UI")
+    analyst_parser = subparsers.add_parser("analyst", help="Analyze UI patterns")
     analyst_parser.add_argument("--context", type=str, default="output/project_context.md")
     
     # validator command
-    validator_parser = subparsers.add_parser("validator", help="Valida macchina a stati XState")
+    validator_parser = subparsers.add_parser("validator", help="Validate XState state machine")
     validator_parser.add_argument("--machine", type=str, default="output/spec/spec_machine.json")
     validator_parser.add_argument("--output", type=str, default=None,
                                   help="Output JSON report file")
