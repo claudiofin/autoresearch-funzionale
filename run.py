@@ -72,7 +72,7 @@ def main():
     os.makedirs("output", exist_ok=True)
     
     if args.command == "loop":
-        from loop import main as loop_main
+        from loop import main as loop_main  # type: ignore
         sys.argv = ["loop",
                      "--context", args.context,
                      "--max-iterations", str(args.max_iterations),
@@ -84,7 +84,7 @@ def main():
         loop_main()
     
     elif args.command == "completeness":
-        from completeness import main as comp_main
+        from completeness import main as comp_main  # type: ignore
         sys.argv = ["completeness",
                      "--spec", args.spec,
                      "--machine", args.machine,
@@ -94,34 +94,34 @@ def main():
         comp_main()
     
     elif args.command == "fuzzer":
-        from fuzzer import main as fuzz_main
+        from fuzzer import main as fuzz_main  # type: ignore
         sys.argv = ["fuzzer", "--machine", args.machine]
         fuzz_main()
     
     elif args.command == "critic":
-        from critic import main as critic_main
+        from critic import main as critic_main  # type: ignore
         sys.argv = ["critic", "--fuzz-report", args.fuzz_report]
         critic_main()
     
     elif args.command == "spec":
-        from spec import main as spec_main
+        from spec import main as spec_main  # type: ignore
         sys.argv = ["spec", "--context", args.context]
         spec_main()
     
     elif args.command == "ingest":
-        from ingest import main as ingest_main
+        from ingest import main as ingest_main  # type: ignore
         sys.argv = ["ingest",
                      "--input-dir", args.input_dir,
                      "--output-file", args.output_file]
         ingest_main()
     
     elif args.command == "analyst":
-        from analyst import main as analyst_main
+        from analyst import main as analyst_main  # type: ignore
         sys.argv = ["analyst", "--context", args.context]
         analyst_main()
     
     elif args.command == "validator":
-        from validator import main as validator_main
+        from validator import main as validator_main  # type: ignore
         sys.argv = ["validator", "--machine", args.machine]
         if args.output:
             sys.argv.extend(["--output", args.output])
