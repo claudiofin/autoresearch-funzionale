@@ -32,7 +32,7 @@ from config import LLM_CONFIG, DEFAULT_PROVIDER
 # ---------------------------------------------------------------------------
 
 DEFAULT_INPUT_DIR = "./inputs"
-DEFAULT_OUTPUT_FILE = "project_context.md"
+DEFAULT_OUTPUT_FILE = "output/context/project_context.md"
 
 # ---------------------------------------------------------------------------
 # Helper Functions

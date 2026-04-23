@@ -233,6 +233,9 @@ def run_analysis(context_file: str, output_file: str, time_budget: int) -> dict:
     
     start_time = time.time()
     
+    # Ensure output directory exists
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+    
     # Read context
     with open(context_file, "r", encoding="utf-8") as f:
         context_text = f.read()
@@ -452,7 +455,7 @@ def main():
     parser = argparse.ArgumentParser(description="Generate functional specification from context")
     parser.add_argument("--context", type=str, default="project_context.md",
                         help="Input context file")
-    parser.add_argument("--output", type=str, default="output/spec.md",
+    parser.add_argument("--output", type=str, default="output/spec/spec.md",
                         help="Output spec file")
     parser.add_argument("--time-budget", type=int, default=TIME_BUDGET,
                         help="Time budget in seconds")

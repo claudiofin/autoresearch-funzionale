@@ -31,6 +31,9 @@ from typing import Dict, List, Optional
 DEFAULT_MAX_ITERATIONS = 10
 DEFAULT_TIME_BUDGET = 1200  # 20 minuti
 OUTPUT_DIR = "./output"
+CONTEXT_DIR = "./output/context"
+ANALYST_DIR = "./output/analyst"
+SPEC_DIR = "./output/spec"
 DEFAULT_CHECKPOINT_DIR = "./output/loop_checkpoints"
 FORCE_ALL_ITERATIONS = False  # Se True, forza tutte le iterazioni anche senza errori
 
@@ -53,17 +56,22 @@ class AutonomousLoop:
         force_iterations: bool = FORCE_ALL_ITERATIONS,
         input_dir: str = None
     ):
-        self.context_file = context_file
         self.max_iterations = max_iterations
         self.time_budget = time_budget
         self.checkpoint_dir = checkpoint_dir
         self.force_iterations = force_iterations
         self.input_dir = input_dir  # Se fornito, esegue ingest all'inizio
         
-        # Output files (in output/ directory)
-        self.analyst_output = os.path.join(OUTPUT_DIR, "analyst_suggestions.json")
-        self.spec_output = os.path.join(OUTPUT_DIR, "spec.md")
-        self.spec_machine = os.path.join(OUTPUT_DIR, "spec_machine.json")
+        # Output files (organized in subfolders)
+        if input_dir:
+            # Con ingest automatico, il contesto va in output/context/
+            self.context_file = os.path.join(CONTEXT_DIR, "project_context.md")
+        else:
+            # Contesto fornito dall'utente, usa il percorso dato
+            self.context_file = context_file
+        self.analyst_output = os.path.join(ANALYST_DIR, "analyst_suggestions.json")
+        self.spec_output = os.path.join(SPEC_DIR, "spec.md")
+        self.spec_machine = os.path.join(SPEC_DIR, "spec_machine.json")
         self.fuzz_report = os.path.join(OUTPUT_DIR, "fuzz_report.json")
         self.critic_feedback = os.path.join(OUTPUT_DIR, "critic_feedback.json")
         self.completeness_report = os.path.join(OUTPUT_DIR, "completeness_report.json")
@@ -73,8 +81,11 @@ class AutonomousLoop:
         self.start_time = None
         self.history = []
         
-        # Create checkpoint dir
+        # Create output directories
         os.makedirs(checkpoint_dir, exist_ok=True)
+        os.makedirs(CONTEXT_DIR, exist_ok=True)
+        os.makedirs(ANALYST_DIR, exist_ok=True)
+        os.makedirs(SPEC_DIR, exist_ok=True)
     
     def run(self) -> dict:
         """Esegue il loop autonomo completo."""

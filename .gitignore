@@ -26,17 +26,20 @@ results.tsv
 inputs/*
 !inputs/example.txt
 
-# Generated output files
-output/spec.md
-output/spec_machine.json
+# Generated output files (organized in subfolders)
+output/context/
+output/analyst/
+output/spec/
 output/fuzz_report.json
 output/critic_feedback.json
-output/analyst_suggestions.json
-output/project_context.md
-output/loop_checkpoints/
 output/completeness_report.json
+output/loop_checkpoints/
 
-# Generated files at root (from old runs)
+# Legacy generated files (from old runs)
 project_context.md
 spec.md
 spec_machine.json
+output/project_context.md
+output/analyst_suggestions.json
+output/spec.md
+output/spec_machine.json

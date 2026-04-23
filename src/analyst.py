@@ -179,7 +179,7 @@ def main():
     parser = argparse.ArgumentParser(description="Analyst LLM per analisi funzionale")
     parser.add_argument("--context", type=str, default="output/project_context.md",
                         help="Context file")
-    parser.add_argument("--output", type=str, default="output/analyst_suggestions.json",
+    parser.add_argument("--output", type=str, default="output/analyst/analyst_suggestions.json",
                         help="Output JSON file")
     args = parser.parse_args()
     
