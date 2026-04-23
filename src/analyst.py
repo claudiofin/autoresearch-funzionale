@@ -120,154 +120,31 @@ def get_llm_client():
 # ---------------------------------------------------------------------------
 
 def build_analyst_prompt(context_text: str) -> str:
-    """Costruisce il prompt per l'Analyst LLM."""
+    """Costruisce il prompt per l'Analyst LLM - versione ottimizzata."""
     
-    prompt = f"""# Functional Analysis Agent
+    prompt = f"""Analizza il contesto e genera JSON con: states, transitions, edge_cases, flows, api_endpoints.
 
-Sei un Senior Product Manager e System Analyst esperto.
-Il tuo compito è analizzare il contesto del progetto e generare una specifica funzionale completa.
-
-## Contesto del Progetto
-
+## Contesto
 {context_text}
 
-## Il Tuo Compito
-
-Analizza il contesto e produci un'analisi strutturata che includa:
-
-### 1. Pattern Rilevati
-Identifica quali pattern comuni (checkout, login, form, upload, search, notification) sono presenti.
-
-### 2. Stati Mancanti
-Per ogni pattern rilevato, suggerisci stati che non sono esplicitamente menzionati ma sono necessari per un'esperienza utente completa.
-
-### 3. Transizioni Necessarie
-Definisci come gli utenti si muovono tra gli stati, includendo:
-- Flussi principali (happy path)
-- Flussi alternativi (errori, annullamenti)
-- Flussi di recupero (retry, back navigation)
-
-### 4. Edge Case
-Identifica almeno 5-10 edge case per ogni pattern principale, considerando:
-- Errori di rete e timeout
-- Input utente invalidi
-- Navigazione browser (back button, refresh)
-- Stati concorrenti (doppio click, sessioni multiple)
-- Limiti del sistema (rate limiting, quote)
-
-## Regola CRITICA per Edge Case: Chain of Thought OBBLIGATORIO
-
-Per OGNI edge case, DEVI prima analizzare il PERCHÉ si verifica quel problema specifico, POI definire il comportamento.
-
-**Esempio CORRETTO:**
-```json
+## Output JSON
 {{
-  "id": "EC004",
-  "scenario": "Password Dimenticata",
-  "trigger": "Utente clicca Password dimenticata senza aver compilato il form",
-  "analisi_del_problema": "Lutente non ricorda la propria password attuale. Non e un errore tecnico ma un bisogno di recupero account. Serve un flusso di reset via email.",
-  "expected_behavior": "Apre modale con titolo Recupera Password, campo email con placeholder Inserisci email associata allaccount, pulsante Invia Link di Reset. Link Annulla per chiudere.",
-  "priority": "high",
-  "related_states": ["login_form", "login_recovery"]
+  "states": [{{"name": "snake_case", "description": "...", "entry_actions": [], "exit_actions": [], "parent_pattern": "...", "business_reason": "..."}}],
+  "transitions": [{{"from_state": "...", "to_state": "...", "event": "UPPER_CASE", "guard": null, "actions": [], "business_reason": "..."}}],
+  "edge_cases": [{{"id": "EC001", "scenario": "...", "trigger": "...", "analisi_del_problema": "...", "expected_behavior": "...", "priority": "high|medium|low", "related_states": []}}],
+  "flows": [{{"name": "...", "steps": [{{"trigger": "...", "action": "...", "expected_outcome": "...", "error_scenario": "..."}}]}}],
+  "api_endpoints": [{{"method": "GET|POST|PUT|DELETE", "path": "...", "description": "...", "request_schema": {{}}, "response_schema": {{}}, "error_codes": []}}]
 }}
-```
 
-**Esempio SBAGLIATO (VIETATO):**
-- Usare "Connessione assente" per problemi che non sono di rete
-- Usare "File troppo grande" per problemi di formato
-- Copiare-incollare comportamenti da altri edge case
-- Analisi del problema generica o assente
+## Regole
+1. snake_case per stati, UPPER_CASE per eventi
+2. OGNI stato API deve avere transizioni ERROR, TIMEOUT, CANCEL
+3. OGNI edge_case deve avere transizione corrispondente
+4. NO placeholder generici - descrivi comportamento esatto
+5. Pattern paralleli restano separati, non concatenati
+6. Copri: auth, core flow, error handling, empty states, notifications
 
-### 5. Domande UX
-Elenca le domande di prodotto che richiedono risposta per completare la specifica.
-
-## Formato di Risposta
-
-DEVI rispondere ESCLUSIVAMENTE con un JSON valido che segue questo schema:
-
-```json
-{{
-    "patterns_detected": ["pattern1", "pattern2"],
-    "suggested_states": [
-        {{
-            "name": "state_name",
-            "description": "Cosa rappresenta questo stato",
-            "entry_actions": ["action1", "action2"],
-            "exit_actions": [],
-            "parent_pattern": "pattern_name",
-            "business_reason": "Perché questo stato è necessario dal punto di vista del business"
-        }}
-    ],
-    "suggested_transitions": [
-        {{
-            "from_state": "state1",
-            "to_state": "state2",
-            "event": "EVENT_NAME",
-            "guard": "condition (optional)",
-            "actions": ["action1"],
-            "business_reason": "Perché questa transizione è necessaria"
-        }}
-    ],
-    "suggested_edge_cases": [
-        {{
-            "id": "EC001",
-            "scenario": "Descrizione scenario",
-            "trigger": "Cosa causa questo",
-            "expected_behavior": "Cosa dovrebbe fare il sistema",
-            "priority": "high|medium|low",
-            "related_states": ["state1", "state2"]
-        }}
-    ],
-    "suggested_events": [
-        {{
-            "name": "EVENT_NAME",
-            "description": "Descrizione",
-            "payload": {{"field": "type"}}
-        }}
-    ],
-    "ux_questions": [
-        "Domanda 1?",
-        "Domanda 2?"
-    ],
-    "confidence_score": 0.85
-}}
-```
-
-    ## Regole Importanti
-
-1. **Sii specifico**: Non dire "gestisci gli errori", dì "mostra messaggio di errore con opzione retry"
-2. **Giustifica**: Per ogni stato/transizione, spiega il motivo di business
-3. **Completo**: Copri sia l'happy path che gli error path
-4. **Coerente**: Usa naming convention coerente (snake_case per stati, UPPER_CASE per eventi)
-5. **Pragmatico**: Suggerisci solo stati/transizioni realmente necessari
-
-## Regole OBBLIGATORIE (VIOLAZIONI = OUTPUT INVALIDO)
-
-### 1. DIVIETO DI LINEARITÀ FORZATA (Anti-"Salsiccia")
-- **NON** collegare pattern diversi in un'unica sequenza lineare a meno che non sia LOGICAMENTE NECESSARIO
-- Flussi paralleli (login, checkout, upload) devono rimanere **SEPARATI** o **RAMIFICATI**, non concatenati
-- Esempio di ERRORE: `payment_pending -> login_form -> form_editing -> upload_idle` (questo è un bug)
-- Esempio CORRETTO: Ogni pattern ha i propri stati e transizioni interne, connessi solo tramite stati hub se necessario
-
-### 2. NO PLACEHOLDER (VIETATO COPIA-INCOLLA)
-- **VIETATO USARE**: "gestisce gracefully", "necessario per gestire", "completa il flusso", "permette di procedere"
-- **OBBLIGATORIO**: Descrivere l'esatto comportamento osservabile dall'utente
-  - ❌ SBAGLIATO: "Il sistema gestisce gracefully l'errore"
-  - ✅ CORRETTO: "Mostra toast rosso 'Pagamento fallito: carta rifiutata'. Disabilita pulsante per 3 secondi. Mantiene dati carta compilati."
-
-### 3. MAPPATURA OBBLIGATORIA: EDGE CASE → TRANSIZIONI
-- Per **OGNI** edge_case che identifichi, DEVI creare la transizione corrispondente
-- Esempio: se EC001 = "Pagamento Fallito", devi avere una transizione da payment_pending a checkout_payment con evento PAYMENT_FAILED
-- Se un edge case non ha una transizione associata, l'output è INVALIDO
-
-### 4. TRANSIZIONI DI ERRORE OBBLIGATORIE
-- Ogni stato che chiama API o fa operazioni async DEVE avere transizioni per:
-  - `ERROR` (gestione errore generico)
-  - `TIMEOUT` (timeout operazione)
-  - `CANCEL` (annullamento utente)
-- Esempio: `payment_pending` deve avere almeno 3 uscite: SUCCESS, ERROR, TIMEOUT
-
-Rispondi SOLO con il JSON, senza testo aggiuntivo.
+Rispondi SOLO con JSON valido, niente markdown.
 """
     
     return prompt
@@ -317,23 +194,23 @@ def call_llm_analyst(prompt: str, max_retries: int = 3) -> dict:
     client = OpenAI(api_key=api_key, base_url=base_url)
     
     print(f"  🤖 Chiamata LLM in corso ({model})...")
-    print(f"  ⏱️  Timeout: 120s, Max tokens: 4096")
+    print(f"  ⏱️  Timeout: 180s, Max tokens: 2048")
     
     last_error = None
     for attempt in range(max_retries):
         try:
             print(f"  Tentativo {attempt + 1}/{max_retries}...")
             response = client.chat.completions.create(
-                timeout=120,
+                timeout=180,
                 model=model,
                 messages=[
-                    {"role": "system", "content": "Sei un Senior Product Manager e System Analyst esperto. Rispondi SOLO con JSON valido, senza markdown o codice. Solo JSON puro."},
+                    {"role": "system", "content": "Rispondi SOLO con JSON valido. Niente markdown, niente codice. Solo JSON puro."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.7,
-                max_tokens=4096,
-                frequency_penalty=0.5,
-                presence_penalty=0.3
+                temperature=0.5,
+                max_tokens=2048,
+                frequency_penalty=0.3,
+                presence_penalty=0.2
             )
             
             content = response.choices[0].message.content.strip()

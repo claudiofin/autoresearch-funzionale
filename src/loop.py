@@ -233,7 +233,7 @@ class AutonomousLoop:
                 ["python3", script, "--context", self.context_file],
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=300,
                 env=env
             )
             
@@ -268,7 +268,7 @@ class AutonomousLoop:
                 ["python3", script, "--context", self.context_file],
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=300,
                 env=env
             )
             
@@ -304,7 +304,7 @@ class AutonomousLoop:
                 ["python3", script, "--spec", self.spec_output, "--machine", self.spec_machine, "--context", self.context_file, "--fix"],
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=300,
                 env=env
             )
             

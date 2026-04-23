@@ -175,57 +175,29 @@ def call_llm_spec(context_text: str, max_retries: int = 3) -> dict:
     from openai import OpenAI
     client = OpenAI(api_key=api_key, base_url=base_url)
     
-    prompt = f"""You are a Senior Product Manager and System Analyst.
+    prompt = f"""Analizza il contesto e genera JSON con: states, transitions, edge_cases, flows, api_endpoints.
 
-Analyze this project context and generate a COMPLETE functional specification in JSON format.
-
-## Project Context
-
+## Contesto
 {context_text}
 
-## Your Task
-
-Generate a comprehensive functional specification as JSON with these fields:
-
-1. **states**: Array of state objects with: name, description, entry_actions (array), exit_actions (array), parent_pattern, business_reason
-2. **transitions**: Array of transition objects with: from_state, to_state, event, guard (optional), actions (array), business_reason
-3. **edge_cases**: Array of edge case objects with: id, scenario, trigger, analisi_del_problema, expected_behavior, priority, related_states
-4. **flows**: Array of flow objects with: name, steps (array of objects with: trigger, action, expected_outcome, error_scenario)
-5. **api_endpoints**: Array of endpoint objects with: method, path, description, request_schema, response_schema, error_codes
-
-## MANDATORY COVERAGE - ANALYZE THE CONTEXT AND IDENTIFY ALL CRITICAL FLOWS
-
-Read the project context carefully and identify ALL the flows that are essential for THIS specific product. For each flow you identify, you MUST include:
-
-### Required Flow Types (include all that apply to this project):
-
-1. **Authentication Flow**: Login, logout, password recovery, session management
-2. **Core User Journey**: The main action users take (purchase, search, create, etc.)
-3. **Error Handling**: What happens when things go wrong (network errors, validation failures, server errors)
-4. **Empty States**: What the user sees when there's no data (empty search, no results, first-time user)
-5. **Notifications/Alerts**: How the system communicates important information
-6. **Settings/Preferences**: User configuration and personalization
-
-## CRITICAL RULES
-
-1. Be SPECIFIC to the project context - analyze the actual product described
-2. NO generic placeholders - describe exact user-visible behavior
-3. Every edge case MUST have a corresponding transition
-4. Every state that calls APIs MUST have ERROR, TIMEOUT, CANCEL transitions
-5. Use snake_case for states, UPPER_CASE for events
-6. Include ALL flows that are relevant to this specific product - don't skip any
-
-## Response Format
-
-Respond ONLY with valid JSON (no markdown, no code blocks):
-
+## Output JSON
 {{
-  "states": [...],
-  "transitions": [...],
-  "edge_cases": [...],
-  "flows": [...],
-  "api_endpoints": [...]
+  "states": [{{"name": "snake_case", "description": "...", "entry_actions": [], "exit_actions": [], "parent_pattern": "...", "business_reason": "..."}}],
+  "transitions": [{{"from_state": "...", "to_state": "...", "event": "UPPER_CASE", "guard": null, "actions": [], "business_reason": "..."}}],
+  "edge_cases": [{{"id": "EC001", "scenario": "...", "trigger": "...", "analisi_del_problema": "...", "expected_behavior": "...", "priority": "high|medium|low", "related_states": []}}],
+  "flows": [{{"name": "...", "steps": [{{"trigger": "...", "action": "...", "expected_outcome": "...", "error_scenario": "..."}}]}}],
+  "api_endpoints": [{{"method": "GET|POST|PUT|DELETE", "path": "...", "description": "...", "request_schema": {{}}, "response_schema": {{}}, "error_codes": []}}]
 }}
+
+## Regole
+1. snake_case per stati, UPPER_CASE per eventi
+2. OGNI stato API deve avere transizioni ERROR, TIMEOUT, CANCEL
+3. OGNI edge_case deve avere transizione corrispondente
+4. NO placeholder generici - descrivi comportamento esatto
+5. Pattern paralleli restano separati, non concatenati
+6. Copri: auth, core flow, error handling, empty states, notifications
+
+Rispondi SOLO con JSON valido, niente markdown.
 """
     
     print(f"  🤖 Chiamata LLM per spec ({model})...")
@@ -234,16 +206,16 @@ Respond ONLY with valid JSON (no markdown, no code blocks):
         try:
             print(f"  Tentativo {attempt + 1}/{max_retries}...")
             response = client.chat.completions.create(
-                timeout=120,
+                timeout=180,
                 model=model,
                 messages=[
-                    {"role": "system", "content": "Sei un Senior Product Manager. Rispondi SOLO con JSON valido, senza markdown. Solo JSON puro."},
+                    {"role": "system", "content": "Rispondi SOLO con JSON valido. Niente markdown, niente codice. Solo JSON puro."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.7,
-                max_tokens=8192,
-                frequency_penalty=0.5,
-                presence_penalty=0.3
+                temperature=0.5,
+                max_tokens=2048,
+                frequency_penalty=0.3,
+                presence_penalty=0.2
             )
             
             content = response.choices[0].message.content.strip()
