@@ -337,20 +337,26 @@ def generate_index(states: dict, machine: dict, output_dir: str) -> str:
     
     md += "\n---\n\n"
     
-    # Diagramma di flusso (Mermaid)
+    # Diagramma di flusso (PlantUML)
     md += "## 🗺️ Diagramma di Flusso\n\n"
-    md += "```mermaid\n"
-    md += "stateDiagram-v2\n"
+    md += "```plantuml\n"
+    md += "@startuml\n"
+    md += "skinparam state {\n"
+    md += "  BackgroundColor #E8F5E9\n"
+    md += "  BorderColor #2E7D32\n"
+    md += "  ArrowColor #1B5E20\n"
+    md += "}\n\n"
     
     initial = machine.get("initial", "")
     if initial:
-        md += f"    [*] --> {initial}\n"
+        md += f"  [*] --> {initial}\n"
     
     for state_name, state_def in states.items():
         transitions = state_def.get("on", {})
         for event, dest in transitions.items():
-            md += f"    {state_name} --> {dest} : {event}\n"
+            md += f"  {state_name} --> {dest} : {event}\n"
     
+    md += "@enduml\n"
     md += "```\n\n"
     md += "---\n\n"
     

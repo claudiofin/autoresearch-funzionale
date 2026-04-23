@@ -1,6 +1,6 @@
 # UI Specifications — Indice
 
-Generato il: 2026-04-23 17:31
+Generato il: 2026-04-23 17:35
 
 Questo file contiene l'indice di tutte le specifiche UI generate dalla macchina a stati.
 
@@ -23,29 +23,36 @@ Questo file contiene l'indice di tutte le specifiche UI generate dalla macchina 
 
 ## 🗺️ Diagramma di Flusso
 
-```mermaid
-stateDiagram-v2
-    [*] --> app_idle
-    app_idle --> iniziale : AVVIA_CARICAMENTO
-    app_idle --> iniziale : START_FLOW
-    app_idle --> authenticating : VALIDATE_TOKEN
-    iniziale --> caricamento : AVVIA_CARICAMENTO
-    iniziale --> errore : INPUT_INVALIDO
-    iniziale --> caricamento : VALIDATE_AND_LOAD
-    caricamento --> successo : DATI_CARICATI
-    caricamento --> errore : ERRORE_RETE
-    caricamento --> app_idle : TIMEOUT
-    caricamento --> successo : FETCH_SUCCESS
-    caricamento --> vuoto : FETCH_EMPTY
-    caricamento --> errore : FETCH_ERROR
-    vuoto --> caricamento : RICARICA
-    vuoto --> app_idle : ANNULLA
-    errore --> caricamento : RIPROVA
-    errore --> sessione_scaduta : RIAUTENTICAZIONE
-    successo --> vuoto : TORNA_INDIETRO
-    successo --> caricamento : AGGIORNA
-    sessione_scaduta --> iniziale : RIAUTENTICAZIONE
-    authenticating --> iniziale : TOKEN_VALIDO
+```plantuml
+@startuml
+skinparam state {
+  BackgroundColor #E8F5E9
+  BorderColor #2E7D32
+  ArrowColor #1B5E20
+}
+
+  [*] --> app_idle
+  app_idle --> iniziale : AVVIA_CARICAMENTO
+  app_idle --> iniziale : START_FLOW
+  app_idle --> authenticating : VALIDATE_TOKEN
+  iniziale --> caricamento : AVVIA_CARICAMENTO
+  iniziale --> errore : INPUT_INVALIDO
+  iniziale --> caricamento : VALIDATE_AND_LOAD
+  caricamento --> successo : DATI_CARICATI
+  caricamento --> errore : ERRORE_RETE
+  caricamento --> app_idle : TIMEOUT
+  caricamento --> successo : FETCH_SUCCESS
+  caricamento --> vuoto : FETCH_EMPTY
+  caricamento --> errore : FETCH_ERROR
+  vuoto --> caricamento : RICARICA
+  vuoto --> app_idle : ANNULLA
+  errore --> caricamento : RIPROVA
+  errore --> sessione_scaduta : RIAUTENTICAZIONE
+  successo --> vuoto : TORNA_INDIETRO
+  successo --> caricamento : AGGIORNA
+  sessione_scaduta --> iniziale : RIAUTENTICAZIONE
+  authenticating --> iniziale : TOKEN_VALIDO
+@enduml
 ```
 
 ---
