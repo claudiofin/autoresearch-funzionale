@@ -212,10 +212,24 @@ def check_spec_completeness(spec_file: str, machine_file: str, mandatory_flows: 
     return results
 
 
-def generate_fix_prompt(results: dict, context_text: str) -> str:
-    """Genera un prompt aggressivo per correggere i flussi mancanti."""
+def generate_fix_prompt(results: dict, context_text: str, machine: dict) -> str:
+    """Genera un prompt aggressivo per correggere i flussi mancanti.
+    
+    Passa la macchina a stati esistente all'LLM per evitare duplicati.
+    """
     
     missing_flows = [fid for fid, r in results.items() if not r["complete"]]
+    
+    # Estrai stati e transizioni esistenti
+    existing_states = list(machine.get("states", {}).keys())
+    existing_transitions = []
+    for state_name, state_config in machine.get("states", {}).items():
+        for event, target in state_config.get("on", {}).items():
+            if isinstance(target, dict):
+                target_state = target.get("target", "")
+            else:
+                target_state = target
+            existing_transitions.append(f"{state_name} --{event}--> {target_state}")
     
     prompt = f"""URGENT: Your previous specification is MISSING critical flows. You MUST add these flows NOW.
 
@@ -235,9 +249,31 @@ def generate_fix_prompt(results: dict, context_text: str) -> str:
 
 {context_text}
 
+## Current State Machine (EXISTING - DO NOT DUPLICATE)
+
+Existing states ({len(existing_states)}):
+{chr(10).join(f'- {s}' for s in existing_states)}
+
+Existing transitions ({len(existing_transitions)}):
+{chr(10).join(f'- {t}' for t in existing_transitions[:50])}
+{'...' if len(existing_transitions) > 50 else ''}
+
 ## YOUR TASK
 
 Generate ONLY the missing states and transitions as JSON. Do NOT regenerate the entire spec.
+
+CRITICAL RULES:
+1. Before creating a NEW state, check if an EXISTING state can serve the same purpose
+2. If a missing state is semantically similar to an existing one, REUSE the existing one
+3. Only create new states when absolutely necessary (no existing state fits)
+4. When reusing existing states, use their EXACT names (case-sensitive)
+5. All transitions MUST reference existing states or your newly created states
+
+Examples of state reuse:
+- If you need "idle" and "app_idle" exists → use "app_idle"
+- If you need "loading" and "auth_loading" exists → use "auth_loading"  
+- If you need "authenticated" and "auth_success" exists → use "auth_success"
+- If you need "error" and "error_network" exists → use "error_network"
 
 Respond with JSON:
 {{
@@ -254,11 +290,18 @@ CRITICAL: You MUST include ALL missing states and transitions listed above. This
     return prompt
 
 
-def call_llm_fix(context_text: str, results: dict, max_retries: int = 3) -> dict:
-    """Chiama l'LLM per generare solo i flussi mancanti."""
+def call_llm_fix(context_text: str, results: dict, machine: dict, max_retries: int = 3) -> dict:
+    """Chiama l'LLM per generare solo i flussi mancanti.
+    
+    Args:
+        context_text: Contesto del progetto
+        results: Risultati del completeness check
+        machine: Macchina a stati esistente (per evitare duplicati)
+        max_retries: Tentativi prima di fallire
+    """
     client, model = get_llm_client()
     
-    prompt = generate_fix_prompt(results, context_text)
+    prompt = generate_fix_prompt(results, context_text, machine)
     
     print(f"  🤖 Chiamata LLM per fix ({model})...")
     
@@ -429,12 +472,12 @@ def main():
         print("AUTOMATIC FIX")
         print("=" * 60)
         
-        # Call LLM to generate fix
-        fix_data = call_llm_fix(context_text, results)
-        
-        # Read and apply fix
+        # Read machine BEFORE calling LLM (needed for the prompt)
         with open(args.machine, "r") as f:
             machine = json.load(f)
+        
+        # Call LLM to generate fix (pass existing machine to avoid duplicates)
+        fix_data = call_llm_fix(context_text, results, machine)
         
         machine = apply_fix(machine, fix_data)
         

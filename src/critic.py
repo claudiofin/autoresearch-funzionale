@@ -1,14 +1,14 @@
 """
 Critic - Agente di revisione per analisi funzionale automatica.
 
-Analizza i report del fuzzer e della completeness check per generare
+Analizza i report del fuzzer, la specifica e il contesto del progetto per generare
 feedback strutturato che l'Analyst può usare per migliorare la specifica.
 
 Il Critic adotta un approccio "Red Team": cerca attivamente buchi logici,
-edge case non gestiti e decisioni UX ambigue.
+edge case non gestiti, decisioni UX ambigue e FLUSSI MANCANTI.
 
 Usage:
-    python src/critic.py --fuzz-report output/fuzz_report.json --spec output/spec/spec.md --machine output/spec/spec_machine.json
+    python src/critic.py --fuzz-report output/fuzz_report.json --spec output/spec/spec.md --machine output/spec/spec_machine.json --context output/context/project_context.md
 """
 
 import os
@@ -48,8 +48,15 @@ def get_llm_client():
     return OpenAI(api_key=api_key, base_url=base_url), model
 
 
-def call_llm_critic(fuzz_report: dict, spec_text: str, machine: dict) -> dict:
-    """Chiama l'LLM per un'analisi critica approfondita."""
+def call_llm_critic(fuzz_report: dict, spec_text: str, machine: dict, context_text: str = "") -> dict:
+    """Chiama l'LLM per un'analisi critica approfondita.
+    
+    Args:
+        fuzz_report: Report del fuzzer
+        spec_text: Testo della specifica
+        machine: Macchina a stati
+        context_text: Contesto del progetto (per rilevare flussi mancanti)
+    """
     client, model = get_llm_client()
     if not client:
         return None
@@ -57,6 +64,25 @@ def call_llm_critic(fuzz_report: dict, spec_text: str, machine: dict) -> dict:
     # Prepara il prompt
     fuzz_summary = json.dumps(fuzz_report.get("summary", {}), indent=2)
     bugs = json.dumps(fuzz_report.get("bugs", []), indent=2)
+    
+    states = machine.get("states", {})
+    state_names = list(states.keys())
+    transitions_list = []
+    for state_name, state_config in states.items():
+        for event, target in state_config.get("on", {}).items():
+            if isinstance(target, dict):
+                target_state = target.get("target", "")
+            else:
+                target_state = target
+            transitions_list.append(f"{state_name} --{event}--> {target_state}")
+    
+    # Costruisci il prompt con contesto opzionale
+    context_section = ""
+    if context_text:
+        context_section = f"""
+## Project Context (Original Requirements)
+{context_text[:4000]}
+"""
     
     prompt = f"""You are a ruthless QA Engineer and UX Reviewer. Your job is to find flaws in this functional specification.
 
@@ -70,15 +96,18 @@ def call_llm_critic(fuzz_report: dict, spec_text: str, machine: dict) -> dict:
 {spec_text[:3000]}
 
 ## State Machine Summary
-States: {len(machine.get('states', {}))}
+States ({len(state_names)}): {', '.join(state_names[:20])}{'...' if len(state_names) > 20 else ''}
 Initial: {machine.get('initial', 'unknown')}
-
+Transitions ({len(transitions_list)}):
+{chr(10).join(f'- {t}' for t in transitions_list[:30])}
+{'...' if len(transitions_list) > 30 else ''}
+{context_section}
 Your task: Analyze and provide critical feedback in JSON format:
 {{
   "critical_issues": [
     {{
       "id": "CRIT-001",
-      "category": "logic|ux|error_handling|security|performance",
+      "category": "logic|ux|error_handling|security|performance|missing_flow",
       "description": "Clear description of the issue",
       "affected_states": ["state1", "state2"],
       "severity": "critical|high|medium",
@@ -101,6 +130,18 @@ Your task: Analyze and provide critical feedback in JSON format:
       "priority": "high|medium|low"
     }}
   ],
+  "missing_flows": [
+    {{
+      "id": "FLOW-001",
+      "flow_name": "Name of the missing flow",
+      "description": "What this flow should do",
+      "business_reason": "Why this is required based on project context",
+      "suggested_states": ["state1", "state2"],
+      "suggested_transitions": [
+        {{"from": "state1", "to": "state2", "event": "EVENT_NAME"}}
+      ]
+    }}
+  ],
   "recommendations": [
     "General recommendation 1",
     "General recommendation 2"
@@ -114,6 +155,7 @@ Be thorough. Look for:
 4. Performance issues (unnecessary API calls, missing caching)
 5. UX problems (confusing states, missing feedback)
 6. Edge cases the fuzzer might have missed
+7. **MISSING FLOWS**: Compare the project context with the current state machine. Are there any features or flows described in the context that are completely absent from the state machine? (e.g., if the app has login but no auth flow exists, if it has search but no search states)
 """
     
     try:
@@ -124,7 +166,7 @@ Be thorough. Look for:
                 {"role": "user", "content": prompt}
             ],
             temperature=0.3,
-            max_tokens=4000
+            max_tokens=8192
         )
         
         content = response.choices[0].message.content.strip()
@@ -244,6 +286,7 @@ def print_critic_report(report: dict):
     issues = report.get("critical_issues", [])
     ux = report.get("ux_decisions_needed", [])
     edges = report.get("edge_cases_to_add", [])
+    missing = report.get("missing_flows", [])
     recs = report.get("recommendations", [])
     
     print(f"\n🔴 CRITICAL ISSUES ({len(issues)}):")
@@ -266,6 +309,19 @@ def print_critic_report(report: dict):
         print(f"    Expected: {ec['expected_behavior']} | Priority: {ec['priority']}")
         print()
     
+    if missing:
+        print(f"\n🚨 MISSING FLOWS ({len(missing)}):")
+        for flow in missing:
+            print(f"  [{flow['id']}] {flow['flow_name']}")
+            print(f"    Description: {flow['description']}")
+            print(f"    Business reason: {flow.get('business_reason', 'N/A')}")
+            if flow.get('suggested_states'):
+                print(f"    Suggested states: {', '.join(flow['suggested_states'])}")
+            if flow.get('suggested_transitions'):
+                for t in flow['suggested_transitions']:
+                    print(f"    Suggested transition: {t.get('from', '?')} --{t.get('event', '?')}--> {t.get('to', '?')}")
+        print()
+    
     print(f"\n💡 RECOMMENDATIONS ({len(recs)}):")
     for rec in recs:
         print(f"  - {rec}")
@@ -281,6 +337,8 @@ def main():
                         help="Spec file for context")
     parser.add_argument("--machine", type=str, default="output/spec/spec_machine.json",
                         help="State machine JSON file")
+    parser.add_argument("--context", type=str, default=None,
+                        help="Project context file (for missing flow detection)")
     parser.add_argument("--output", type=str, default="output/critic_feedback.json",
                         help="Output JSON file (default: output/critic_feedback.json)")
     parser.add_argument("--use-llm", action="store_true",
@@ -302,6 +360,13 @@ def main():
         with open(args.spec, "r", encoding="utf-8") as f:
             spec_text = f.read()
     
+    # Carica context (opzionale)
+    context_text = ""
+    if args.context and os.path.exists(args.context):
+        with open(args.context, "r", encoding="utf-8") as f:
+            context_text = f.read()
+        print(f"📄 Context loaded: {len(context_text)} chars")
+    
     # Carica machine
     if not os.path.exists(args.machine):
         print(f"Error: Machine file not found: {args.machine}")
@@ -316,9 +381,9 @@ def main():
     
     # Prova LLM prima se richiesto o se ci sono bug
     llm_result = None
-    if args.use_llm or fuzz_report.get("summary", {}).get("bugs_found", 0) > 0:
+    if args.use_llm or fuzz_report.get("summary", {}).get("bugs_found", 0) > 0 or context_text:
         print(f"\n  🤖 Trying LLM critic...")
-        llm_result = call_llm_critic(fuzz_report, spec_text, machine)
+        llm_result = call_llm_critic(fuzz_report, spec_text, machine, context_text)
     
     # Fallback su analisi statica
     if llm_result:
@@ -334,6 +399,7 @@ def main():
         "method": "llm" if llm_result else "static",
         "fuzz_report_used": os.path.exists(args.fuzz_report),
         "spec_used": os.path.exists(args.spec),
+        "context_used": bool(context_text),
     }
     
     print_critic_report(report)

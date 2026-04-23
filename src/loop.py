@@ -2,7 +2,7 @@
 Loop autonomo per analisi funzionale automatica.
 
 Coordina il flusso:
-  Ingest → Analyst → Spec → Completeness → Fuzzer → Critic → Analyst → ...
+  Ingest → Analyst → Spec → Validator → Fuzzer → Critic → Analyst → ...
 
 Criteri di stop:
   - 0 errori critici
@@ -183,22 +183,15 @@ class AutonomousLoop:
             if dead_ends > 0:
                 result["warnings"] = result.get("warnings", []) + [f"{dead_ends} dead-end states found"]
         
-        # Step 3: Completeness check
-        print("\n✅ Step 3: Completeness check...")
-        completeness_result = self._run_completeness()
-        result["steps"]["completeness"] = completeness_result
-        if completeness_result.get("error"):
-            result["errors"].append(f"Completeness: {completeness_result['error']}")
-        
-        # Step 4: Fuzzer
+        # Step 3: Fuzzer
         print("\n🔍 Step 4: Fuzzer...")
         fuzz_result = self._run_fuzzer()
         result["steps"]["fuzzer"] = fuzz_result
         if fuzz_result.get("error"):
             result["errors"].append(f"Fuzzer: {fuzz_result['error']}")
         
-        # Step 5: Critic
-        print("\n🧐 Step 5: Critic...")
+        # Step 4: Critic
+        print("\n🧐 Step 4: Critic...")
         critic_result = self._run_critic()
         result["steps"]["critic"] = critic_result
         if critic_result.get("error"):
@@ -366,46 +359,6 @@ class AutonomousLoop:
         except Exception as e:
             return {"error": str(e)}
     
-    def _run_completeness(self) -> dict:
-        """Esegue il completeness check e legge il report JSON."""
-        try:
-            env = os.environ.copy()
-            script = os.path.join(SCRIPT_DIR, "completeness.py")
-            result = subprocess.run(
-                ["python3", script, "--spec", self.spec_output, "--machine", self.spec_machine, "--context", self.context_file, "--fix"],
-                capture_output=True,
-                text=True,
-                timeout=600,  # Aumentato da 300 a 600 per LLM lenti
-                env=env
-            )
-            
-            if result.stdout:
-                for line in result.stdout.strip().split("\n"):
-                    if line.strip():
-                        print(f"  {line}")
-            
-            # Leggi il report JSON con le metriche
-            if os.path.exists(self.completeness_report):
-                with open(self.completeness_report, "r") as f:
-                    data = json.load(f)
-                return {
-                    "success": True,
-                    "total_flows": data.get("total_flows", 0),
-                    "complete_flows": data.get("complete_flows", 0),
-                    "missing_flows": data.get("missing_flows", 0),
-                    "fix_applied": data.get("fix_applied", False),
-                    "fix_success": data.get("fix_success"),
-                    "flows_fixed": data.get("flows_fixed", []),
-                    "flows_still_missing": data.get("flows_still_missing", []),
-                }
-            
-            return {"success": True}
-            
-        except subprocess.TimeoutExpired:
-            return {"error": "Completeness timeout"}
-        except Exception as e:
-            return {"error": str(e)}
-    
     def _run_fuzzer(self) -> dict:
         """Esegue il Fuzzer."""
         try:
@@ -443,11 +396,18 @@ class AutonomousLoop:
         try:
             env = os.environ.copy()
             script = os.path.join(SCRIPT_DIR, "critic.py")
+            cmd = [
+                "python3", script,
+                "--fuzz-report", self.fuzz_report,
+                "--spec", self.spec_output,
+                "--machine", self.spec_machine,
+                "--context", self.context_file
+            ]
             result = subprocess.run(
-                ["python3", script, "--fuzz-report", self.fuzz_report],
+                cmd,
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=120,  # Aumentato per LLM con contesto
                 env=env
             )
             
