@@ -1,0 +1,203 @@
+{
+  "id": "appFlow",
+  "initial": "idle",
+  "context": {
+    "user": null,
+    "errors": [],
+    "retryCount": 0
+  },
+  "states": {
+    "app_idle": {
+      "entry": [
+        "init_store",
+        "check_session"
+      ],
+      "exit": [
+        "clear_pending_requests"
+      ],
+      "on": {
+        "TRIGGER_LOGIN": "auth_loading"
+      }
+    },
+    "auth_loading": {
+      "entry": [
+        "show_loader",
+        "disable_ui"
+      ],
+      "exit": [
+        "hide_loader",
+        "enable_ui"
+      ],
+      "on": {
+        "AUTH_SUCCESS": "auth_success",
+        "AUTH_FAIL": "auth_error"
+      }
+    },
+    "auth_success": {
+      "entry": [
+        "set_zustand_auth",
+        "fetch_clinic_context"
+      ],
+      "exit": [
+        "invalidate_token_if_expired"
+      ],
+      "on": {
+        "NAVIGATE_DASHBOARD": "dashboard_loading",
+        "NAVIGATE_CATALOG": "catalog_loading"
+      }
+    },
+    "auth_error": {
+      "entry": [
+        "show_error_toast",
+        "log_auth_failure"
+      ],
+      "exit": [
+        "reset_form"
+      ],
+      "on": {}
+    },
+    "dashboard_loading": {
+      "entry": [
+        "show_skeleton",
+        "start_pull_refresh"
+      ],
+      "exit": [
+        "stop_skeleton"
+      ],
+      "on": {
+        "DATA_FETCHED": "dashboard_empty",
+        "FETCH_ERROR": "api_error",
+        "REQUEST_TIMEOUT": "api_timeout",
+        "REQUEST_CANCELLED": "api_cancel"
+      }
+    },
+    "dashboard_ready": {
+      "entry": [
+        "render_charts",
+        "update_indicators"
+      ],
+      "exit": [
+        "cache_data"
+      ],
+      "on": {
+        "LOAD_BENCHMARK": "benchmark_loading",
+        "LOAD_GROUPS": "group_loading"
+      }
+    },
+    "dashboard_empty": {
+      "entry": [
+        "show_empty_illustration",
+        "prompt_onboarding"
+      ],
+      "exit": [],
+      "on": {}
+    },
+    "catalog_loading": {
+      "entry": [
+        "debounce_search",
+        "show_skeleton"
+      ],
+      "exit": [
+        "clear_search_cache"
+      ],
+      "on": {
+        "SEARCH_COMPLETE": "catalog_empty",
+        "FETCH_ERROR": "api_error",
+        "REQUEST_TIMEOUT": "api_timeout",
+        "REQUEST_CANCELLED": "api_cancel"
+      }
+    },
+    "catalog_ready": {
+      "entry": [
+        "render_price_comparison",
+        "highlight_savings"
+      ],
+      "exit": [],
+      "on": {}
+    },
+    "catalog_empty": {
+      "entry": [
+        "show_no_results",
+        "suggest_categories"
+      ],
+      "exit": [],
+      "on": {}
+    },
+    "benchmark_loading": {
+      "entry": [
+        "fetch_cluster_data",
+        "compute_savings"
+      ],
+      "exit": [],
+      "on": {
+        "BENCHMARK_FETCHED": "benchmark_ready",
+        "FETCH_ERROR": "api_error",
+        "REQUEST_TIMEOUT": "api_timeout",
+        "REQUEST_CANCELLED": "api_cancel"
+      }
+    },
+    "benchmark_ready": {
+      "entry": [
+        "render_comparison_chart",
+        "update_positioning"
+      ],
+      "exit": [],
+      "on": {}
+    },
+    "group_loading": {
+      "entry": [
+        "fetch_group_targets",
+        "calculate_participation"
+      ],
+      "exit": [],
+      "on": {
+        "GROUPS_FETCHED": "group_ready",
+        "FETCH_ERROR": "api_error",
+        "REQUEST_TIMEOUT": "api_timeout",
+        "REQUEST_CANCELLED": "api_cancel"
+      }
+    },
+    "group_ready": {
+      "entry": [
+        "render_progress_bars",
+        "enable_join_action"
+      ],
+      "exit": [],
+      "on": {}
+    },
+    "api_error": {
+      "entry": [
+        "show_retry_dialog",
+        "log_error"
+      ],
+      "exit": [
+        "reset_state"
+      ],
+      "on": {
+        "RETRY_REQUEST": "dashboard_loading"
+      }
+    },
+    "api_timeout": {
+      "entry": [
+        "show_timeout_message",
+        "fallback_to_cache"
+      ],
+      "exit": [
+        "abort_request"
+      ],
+      "on": {
+        "RETRY_REQUEST": "dashboard_loading"
+      }
+    },
+    "api_cancel": {
+      "entry": [
+        "clear_loading_state",
+        "restore_previous_view"
+      ],
+      "exit": [],
+      "on": {
+        "RETURN_HOME": "app_idle"
+      }
+    }
+  }
+}

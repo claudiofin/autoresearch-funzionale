@@ -35,9 +35,9 @@ LLM_CONFIG = {
         "description": "Google Gemini 2.0 Flash",
     },
     "dashscope": {
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "model": "qwen-plus",
-        "description": "Alibaba DashScope (Qwen)",
+        "base_url": "https://coding-intl.dashscope.aliyuncs.com/v1",
+        "model": "qwen3.5-plus",
+        "description": "Alibaba DashScope Coding Plan (Qwen 3.5 Plus)",
     },
 }
 
