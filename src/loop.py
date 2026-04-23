@@ -375,7 +375,7 @@ class AutonomousLoop:
                 ["python3", script, "--spec", self.spec_output, "--machine", self.spec_machine, "--context", self.context_file, "--fix"],
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=600,  # Aumentato da 300 a 600 per LLM lenti
                 env=env
             )
             

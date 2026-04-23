@@ -1,398 +1,354 @@
 """
-Critic per analisi funzionale automatica.
+Critic - Agente di revisione per analisi funzionale automatica.
 
-Legge il report del fuzzer e traduce gli errori tecnici in decisioni UX
-che l'Analyst può usare per migliorare la specifica.
+Analizza i report del fuzzer e della completeness check per generare
+feedback strutturato che l'Analyst può usare per migliorare la specifica.
+
+Il Critic adotta un approccio "Red Team": cerca attivamente buchi logici,
+edge case non gestiti e decisioni UX ambigue.
 
 Usage:
-    python critic.py --fuzz-report fuzz_report.json --output critic_feedback.json
+    python src/critic.py --fuzz-report output/fuzz_report.json --spec output/spec/spec.md --machine output/spec/spec_machine.json
 """
 
 import os
 import sys
 import json
 import argparse
-from typing import List, Dict, Optional
 from datetime import datetime
-from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# UX Decision Templates
+# LLM Client (opzionale - se non disponibile, usa analisi statica)
 # ---------------------------------------------------------------------------
 
-UX_DECISION_TEMPLATES = {
-    "UNREACHABLE_STATE": {
-        "title": "Stato Irraggiungibile",
-        "description": "Lo stato '{state}' non può essere raggiunto dal flusso principale.",
-        "ux_question": "Come dovrebbe l'utente arrivare a '{state}'? Quale azione/evento dovrebbe triggerare questa transizione?",
-        "suggestions": [
-            "Aggiungi una transizione da uno stato raggiungibile",
-            "Rimuovi lo stato se non è necessario",
-            "Considera se questo stato dovrebbe essere parte di un sotto-flusso"
-        ]
-    },
-    "DEAD_END": {
-        "title": "Vicolo Cieco",
-        "description": "Lo stato '{state}' non ha transizioni in uscita. L'utente rimane bloccato.",
-        "ux_question": "Cosa dovrebbe succedere dopo che l'utente è in '{state}'? Quali opzioni dovrebbe avere?",
-        "suggestions": [
-            "Aggiungi transizione per continuare il flusso",
-            "Aggiungi opzione per tornare indietro",
-            "Aggiungi opzione per annullare/chiudere"
-        ]
-    },
-    "INFINITE_LOOP_RISK": {
-        "title": "Rischio Loop Infinito",
-        "description": "Rilevato potenziale loop infinito tra stati: {path}",
-        "ux_question": "Come preveniamo che l'utente rimanga intrappolato in questo ciclo?",
-        "suggestions": [
-            "Aggiungi un limite di tentativi (es. max 3 retry)",
-            "Aggiungi una via di uscita (escape hatch)",
-            "Implementa debounce/throttle sugli eventi"
-        ]
-    },
-    "MISSING_ERROR_STATE": {
-        "title": "Stato di Errore Mancante",
-        "description": "Non è definito uno stato per gestire gli errori in '{state}'.",
-        "ux_question": "Cosa vede l'utente quando si verifica un errore in '{state}'?",
-        "suggestions": [
-            "Aggiungi stato 'error' con messaggio appropriato",
-            "Definisci opzioni di recovery (retry, cancel, contact support)",
-            "Considera errori specifici per questo contesto"
-        ]
-    },
-    "MISSING_LOADING_STATE": {
-        "title": "Stato di Caricamento Mancante",
-        "description": "Non è definito uno stato di loading per l'azione '{event}'.",
-        "ux_question": "Come comunichiamo all'utente che l'azione '{event}' è in corso?",
-        "suggestions": [
-            "Aggiungi stato 'loading' con spinner/indicator",
-            "Disabilita i pulsanti durante il loading",
-            "Mostra feedback immediato del click"
-        ]
-    },
-    "MISSING_TIMEOUT_STATE": {
-        "title": "Stato di Timeout Mancante",
-        "description": "Non è gestito il timeout per l'azione '{event}'.",
-        "ux_question": "Cosa succede se l'azione '{event}' richiede troppo tempo?",
-        "suggestions": [
-            "Aggiungi stato 'timeout' con messaggio chiaro",
-            "Definisci durata del timeout (es. 30s)",
-            "Offri opzione di retry con backoff"
-        ]
-    },
-    "EXCESSIVE_SELF_LOOPS": {
-        "title": "Troppi Auto-Loop",
-        "description": "Lo stato '{state}' ha troppi auto-loop: {events}. Questo indica possibile complessità eccessiva.",
-        "ux_question": "Questo stato dovrebbe essere suddiviso in sotto-stati più specifici?",
-        "suggestions": [
-            "Suddividi in stati più specifici",
-            "Usa stati annidati (nested states)",
-            "Raggruppa eventi simili"
-        ]
-    },
-    "UNUSED_CONTEXT": {
-        "title": "Variabile Contesto Inutilizzata",
-        "description": "Una variabile di contesto è definita ma non sembra usata.",
-        "ux_question": "Questa variabile serve davvero? Se sì, dove dovrebbe essere usata?",
-        "suggestions": [
-            "Rimuovi se non necessaria",
-            "Aggiungi logica che usa questa variabile",
-            "Verifica se è usata in codice non analizzato"
-        ]
-    },
-}
-
-
-# ---------------------------------------------------------------------------
-# Critic Analysis
-# ---------------------------------------------------------------------------
-
-class CriticAnalyzer:
-    """Analizza errori del fuzzer e genera feedback UX."""
+def get_llm_client():
+    """Crea client LLM. Returns None se LLM_API_KEY non è settato."""
+    api_key = os.getenv("LLM_API_KEY", "")
+    if not api_key:
+        return None, None
     
-    def __init__(self, fuzz_report: dict, spec_file: str = None):
-        self.report = fuzz_report
-        self.spec_file = spec_file
-        self.feedback = {
-            "timestamp": datetime.now().isoformat(),
-            "summary": {
-                "total_errors": 0,
-                "total_warnings": 0,
-                "critical_issues": [],
-                "ux_decisions_needed": []
-            },
-            "issues": [],
-            "recommendations": []
-        }
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return None, None
     
-    def analyze(self) -> dict:
-        """Esegue l'analisi completa del report."""
-        
-        # Conta errori e warning
-        self.feedback["summary"]["total_errors"] = len(
-            self.report.get("validation_errors", [])
-        )
-        self.feedback["summary"]["total_warnings"] = len(
-            self.report.get("validation_warnings", [])
+    from config import LLM_CONFIG, DEFAULT_PROVIDER
+    
+    provider = os.getenv("LLM_PROVIDER", DEFAULT_PROVIDER)
+    
+    if provider in LLM_CONFIG:
+        base_url = os.getenv("LLM_BASE_URL", LLM_CONFIG[provider]["base_url"])
+        model = os.getenv("LLM_MODEL", LLM_CONFIG[provider]["model"])
+    else:
+        base_url = os.getenv("LLM_BASE_URL")
+        model = os.getenv("LLM_MODEL")
+        if not base_url or not model:
+            return None, None
+    
+    return OpenAI(api_key=api_key, base_url=base_url), model
+
+
+def call_llm_critic(fuzz_report: dict, spec_text: str, machine: dict) -> dict:
+    """Chiama l'LLM per un'analisi critica approfondita."""
+    client, model = get_llm_client()
+    if not client:
+        return None
+    
+    # Prepara il prompt
+    fuzz_summary = json.dumps(fuzz_report.get("summary", {}), indent=2)
+    bugs = json.dumps(fuzz_report.get("bugs", []), indent=2)
+    
+    prompt = f"""You are a ruthless QA Engineer and UX Reviewer. Your job is to find flaws in this functional specification.
+
+## Fuzz Test Results
+{fuzz_summary}
+
+## Bugs Found by Fuzzer
+{bugs}
+
+## Current Specification (excerpt)
+{spec_text[:3000]}
+
+## State Machine Summary
+States: {len(machine.get('states', {}))}
+Initial: {machine.get('initial', 'unknown')}
+
+Your task: Analyze and provide critical feedback in JSON format:
+{{
+  "critical_issues": [
+    {{
+      "id": "CRIT-001",
+      "category": "logic|ux|error_handling|security|performance",
+      "description": "Clear description of the issue",
+      "affected_states": ["state1", "state2"],
+      "severity": "critical|high|medium",
+      "suggestion": "How to fix it"
+    }}
+  ],
+  "ux_decisions_needed": [
+    {{
+      "id": "UX-001",
+      "question": "What should happen when...?",
+      "context": "Current behavior is ambiguous because...",
+      "options": ["Option A", "Option B", "Option C"]
+    }}
+  ],
+  "edge_cases_to_add": [
+    {{
+      "id": "EC-NEW-001",
+      "scenario": "Description of the edge case",
+      "expected_behavior": "What should happen",
+      "priority": "high|medium|low"
+    }}
+  ],
+  "recommendations": [
+    "General recommendation 1",
+    "General recommendation 2"
+  ]
+}}
+
+Be thorough. Look for:
+1. Missing error handling paths
+2. Ambiguous user flows
+3. Security concerns (data exposure, auth bypass)
+4. Performance issues (unnecessary API calls, missing caching)
+5. UX problems (confusing states, missing feedback)
+6. Edge cases the fuzzer might have missed
+"""
+    
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are a QA Engineer. Respond only with valid JSON."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3,
+            max_tokens=4000
         )
         
-        # Analizza errori di validazione
-        for error in self.report.get("validation_errors", []):
-            self._process_error(error)
+        content = response.choices[0].message.content.strip()
+        # Estrai JSON dal response
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
         
-        # Analizza warning
-        for warning in self.report.get("validation_warnings", []):
-            self._process_warning(warning)
-        
-        # Analizza bug di fuzzing
-        fuzz_bugs = self.report.get("fuzzing_bugs", [])
-        if fuzz_bugs:
-            self._analyze_fuzz_bugs(fuzz_bugs)
-        
-        # Genera raccomandazioni globali
-        self._generate_recommendations()
-        
-        return self.feedback
+        return json.loads(content)
     
-    def _process_error(self, error: dict):
-        """Processa un errore di validazione."""
-        error_type = error.get("type", "UNKNOWN")
-        template = UX_DECISION_TEMPLATES.get(error_type, {
-            "title": "Errore Sconosciuto",
-            "description": "Errore: {error}",
-            "ux_question": "Come risolviamo questo errore?",
-            "suggestions": ["Review della specifica"]
-        })
-        
-        state = error.get("state", "unknown")
-        message = error.get("message", "")
-        
-        # Crea issue strutturata
-        issue = {
-            "id": f"ISS-{len(self.feedback['issues'])+1:03d}",
-            "type": error_type,
+    except Exception as e:
+        print(f"⚠️  LLM critic failed: {e}")
+        return None
+
+
+def static_critic_analysis(fuzz_report: dict, machine: dict) -> dict:
+    """Analisi critica statica (senza LLM)."""
+    
+    critical_issues = []
+    ux_decisions = []
+    edge_cases = []
+    recommendations = []
+    
+    summary = fuzz_report.get("summary", {})
+    bugs = fuzz_report.get("bugs", [])
+    
+    # Analizza dead-end states
+    dead_end_bugs = [b for b in bugs if b.get("type") == "dead_end_state"]
+    for bug in dead_end_bugs:
+        critical_issues.append({
+            "id": f"CRIT-{len(critical_issues)+1:03d}",
+            "category": "logic",
+            "description": bug["description"],
+            "affected_states": [bug.get("state", "unknown")],
             "severity": "critical",
-            "title": template["title"],
-            "description": template["description"].format(state=state, error=message),
-            "ux_question": template["ux_question"].format(state=state, event=error.get("event", "unknown")),
-            "suggestions": template["suggestions"],
-            "raw_error": error,
-            "analyst_action_required": True
-        }
-        
-        self.feedback["issues"].append(issue)
-        self.feedback["summary"]["critical_issues"].append(issue["id"])
-    
-    def _process_warning(self, warning: dict):
-        """Processa un warning di validazione."""
-        warning_type = warning.get("type", "UNKNOWN")
-        template = UX_DECISION_TEMPLATES.get(warning_type, {
-            "title": "Warning",
-            "description": "Warning: {warning}",
-            "ux_question": "Come miglioriamo questo aspetto?",
-            "suggestions": ["Review della specifica"]
+            "suggestion": f"Add a transition from '{bug.get('state', 'unknown')}' to handle the dead-end (e.g., retry, go back, or show error)"
         })
-        
-        state = warning.get("state", "unknown")
-        message = warning.get("message", "")
-        
-        # Crea issue
-        issue = {
-            "id": f"ISS-{len(self.feedback['issues'])+1:03d}",
-            "type": warning_type,
-            "severity": "warning",
-            "title": template["title"],
-            "description": template["description"].format(state=state, warning=message),
-            "ux_question": template["ux_question"].format(state=state, event=warning.get("event", "unknown")),
-            "suggestions": template["suggestions"],
-            "raw_error": warning,
-            "analyst_action_required": warning_type in ["DEAD_END", "MISSING_ERROR_STATE"]
-        }
-        
-        self.feedback["issues"].append(issue)
-        if issue["analyst_action_required"]:
-            self.feedback["summary"]["ux_decisions_needed"].append(issue["id"])
     
-    def _analyze_fuzz_bugs(self, bugs: list):
-        """Analizza i bug trovati dal fuzzer."""
-        # Raggruppa bug per tipo
-        bug_types = {}
-        for bug in bugs:
-            bug_type = bug.get("type", "UNKNOWN")
-            if bug_type not in bug_types:
-                bug_types[bug_type] = []
-            bug_types[bug_type].append(bug)
-        
-        # Crea issue per ogni tipo di bug (con esempi)
-        for bug_type, bug_list in bug_types.items():
-            template = UX_DECISION_TEMPLATES.get(bug_type, {
-                "title": bug_type,
-                "description": "Trovati {count} bug di tipo {type}",
-                "ux_question": "Come preveniamo questi bug?",
-                "suggestions": ["Review della specifica"]
-            })
-            
-            # Prendi un esempio rappresentativo
-            example_bug = bug_list[0]
-            details = example_bug.get("details", {})
-            path = details.get("path", [])
-            
-            issue = {
-                "id": f"ISS-{len(self.feedback['issues'])+1:03d}",
-                "type": bug_type,
-                "severity": "warning",
-                "title": template["title"],
-                "description": template["description"].format(
-                    count=len(bug_list), 
-                    type=bug_type,
-                    path=" -> ".join(path[:5]) if path else "N/A"
-                ),
-                "ux_question": template["ux_question"].format(path=path),
-                "occurrences": len(bug_list),
-                "example_path": path[:10],  # Limita a 10 step
-                "suggestions": template["suggestions"],
-                "analyst_action_required": bug_type == "INFINITE_LOOP_RISK"
-            }
-            
-            self.feedback["issues"].append(issue)
-            if issue["analyst_action_required"]:
-                self.feedback["summary"]["ux_decisions_needed"].append(issue["id"])
+    # Analizza unreachable states
+    unreachable = fuzz_report.get("unreachable_states", [])
+    for state in unreachable:
+        critical_issues.append({
+            "id": f"CRIT-{len(critical_issues)+1:03d}",
+            "category": "logic",
+            "description": f"State '{state}' is unreachable from initial state",
+            "affected_states": [state],
+            "severity": "high",
+            "suggestion": f"Either add a transition path to '{state}' or remove it if unused"
+        })
     
-    def _generate_recommendations(self):
-        """Genera raccomandazioni basate sugli errori trovati."""
-        recommendations = []
-        
-        # Conta tipi di errori
-        error_counts = {}
-        for issue in self.feedback["issues"]:
-            error_type = issue["type"]
-            error_counts[error_type] = error_counts.get(error_type, 0) + 1
-        
-        # Genera raccomandazioni basate sui pattern di errori
-        if error_counts.get("DEAD_END", 0) > 0:
-            recommendations.append({
-                "priority": "high",
-                "category": "UX Flow",
-                "recommendation": "Aggiungi transizioni di uscita da tutti gli stati terminali. "
-                                  "Ogni stato dovrebbe avere almeno: (1) via per continuare, "
-                                  "(2) via per annullare/tornare indietro."
-            })
-        
-        if error_counts.get("UNREACHABLE_STATE", 0) > 0:
-            recommendations.append({
-                "priority": "high",
-                "category": "State Design",
-                "recommendation": "Review degli stati irraggiungibili. Per ogni stato, "
-                                  "definisci chiaramente quale evento/azione porta a quello stato."
-            })
-        
-        if error_counts.get("INFINITE_LOOP_RISK", 0) > 0:
-            recommendations.append({
-                "priority": "medium",
-                "category": "Error Handling",
-                "recommendation": "Implementa meccanismi di break per i loop: "
-                                  "max retry count, timeout, o escape hatch."
-            })
-        
-        if len(self.feedback["issues"]) > 10:
-            recommendations.append({
-                "priority": "medium",
-                "category": "Complexity",
-                "recommendation": "La specifica ha molti problemi. Considera di "
-                                  "semplificare il flusso o suddividere in sotto-flussi."
-            })
-        
-        self.feedback["recommendations"] = recommendations
-
-
-# ---------------------------------------------------------------------------
-# Main Function
-# ---------------------------------------------------------------------------
-
-def run_critic(fuzz_report_file: str, output_file: str) -> dict:
-    """
-    Esegue l'analisi del Critic.
+    # Analizza unknown targets
+    unknown_bugs = [b for b in bugs if b.get("type") == "unknown_target"]
+    for bug in unknown_bugs:
+        critical_issues.append({
+            "id": f"CRIT-{len(critical_issues)+1:03d}",
+            "category": "logic",
+            "description": bug["description"],
+            "affected_states": [bug.get("from_state", "unknown")],
+            "severity": "critical",
+            "suggestion": f"Fix the transition target to point to a valid state"
+        })
     
-    Args:
-        fuzz_report_file: File del report del fuzzer
-        output_file: File JSON di output per il feedback
-        
-    Returns:
-        Metriche sull'analisi
-    """
+    # UX decisions basate sugli stati di loading
+    states = machine.get("states", {})
+    loading_states = [s for s in states.keys() if "loading" in s.lower()]
+    if loading_states:
+        ux_decisions.append({
+            "id": f"UX-{len(ux_decisions)+1:03d}",
+            "question": "What should the user see during loading states?",
+            "context": f"There are {len(loading_states)} loading states ({', '.join(loading_states[:3])}...)",
+            "options": ["Skeleton screens", "Loading spinner with progress", "Static placeholder", "Shimmer effect"]
+        })
     
-    import time
-    start_time = time.time()
+    # Edge cases basati sugli stati di errore
+    error_states = [s for s in states.keys() if "error" in s.lower() or "timeout" in s.lower()]
+    if error_states:
+        edge_cases.append({
+            "id": f"EC-NEW-{len(edge_cases)+1:03d}",
+            "scenario": "User is in error state and tries to retry",
+            "expected_behavior": "Should show retry button with exponential backoff",
+            "priority": "high"
+        })
+        edge_cases.append({
+            "id": f"EC-NEW-{len(edge_cases)+1:03d}",
+            "scenario": "Multiple consecutive errors occur",
+            "expected_behavior": "After 3 failures, show 'contact support' option",
+            "priority": "high"
+        })
     
-    # Leggi report
-    with open(fuzz_report_file, "r", encoding="utf-8") as f:
-        fuzz_report = json.load(f)
+    # Recommendations
+    if summary.get("total_errors", 0) > 0:
+        recommendations.append(f"Fix {summary['total_errors']} structural errors before proceeding")
+    if summary.get("unreachable_states", 0) > 0:
+        recommendations.append(f"Review {summary['unreachable_states']} unreachable states - they may indicate missing flows")
+    if summary.get("structural_loops", 0) > 0:
+        recommendations.append(f"Verify {summary['structural_loops']} structural loops are intentional (not infinite loops)")
     
-    print(f"Report caricato: {len(fuzz_report.get('validation_errors', []))} errori, "
-          f"{len(fuzz_report.get('validation_warnings', []))} warning")
+    if not recommendations:
+        recommendations.append("Specification looks solid. Consider adding more edge cases for production readiness.")
     
-    # Analizza
-    analyzer = CriticAnalyzer(fuzz_report)
-    feedback = analyzer.analyze()
-    
-    # Scrivi output
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(feedback, f, indent=2, ensure_ascii=False)
-    
-    elapsed = time.time() - start_time
-    
-    # Metriche
-    metrics = {
-        "total_issues": len(feedback["issues"]),
-        "critical_issues": len(feedback["summary"]["critical_issues"]),
-        "ux_decisions_needed": len(feedback["summary"]["ux_decisions_needed"]),
-        "recommendations": len(feedback["recommendations"]),
-        "output_file": output_file,
-        "elapsed_seconds": elapsed
+    return {
+        "critical_issues": critical_issues,
+        "ux_decisions_needed": ux_decisions,
+        "edge_cases_to_add": edge_cases,
+        "recommendations": recommendations
     }
+
+
+def print_critic_report(report: dict):
+    """Stampa il report del critic."""
     
-    return metrics
+    print("\n" + "=" * 60)
+    print("CRITIC REVIEW REPORT")
+    print("=" * 60)
+    
+    issues = report.get("critical_issues", [])
+    ux = report.get("ux_decisions_needed", [])
+    edges = report.get("edge_cases_to_add", [])
+    recs = report.get("recommendations", [])
+    
+    print(f"\n🔴 CRITICAL ISSUES ({len(issues)}):")
+    for issue in issues:
+        print(f"  [{issue['id']}] {issue['description']}")
+        print(f"    Category: {issue['category']} | Severity: {issue['severity']}")
+        print(f"    Suggestion: {issue['suggestion']}")
+        print()
+    
+    print(f"\n🤔 UX DECISIONS NEEDED ({len(ux)}):")
+    for decision in ux:
+        print(f"  [{decision['id']}] {decision['question']}")
+        print(f"    Context: {decision['context']}")
+        print(f"    Options: {', '.join(decision['options'])}")
+        print()
+    
+    print(f"\n📋 EDGE CASES TO ADD ({len(edges)}):")
+    for ec in edges:
+        print(f"  [{ec['id']}] {ec['scenario']}")
+        print(f"    Expected: {ec['expected_behavior']} | Priority: {ec['priority']}")
+        print()
+    
+    print(f"\n💡 RECOMMENDATIONS ({len(recs)}):")
+    for rec in recs:
+        print(f"  - {rec}")
+    
+    print("\n" + "=" * 60)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Critic per analisi funzionale")
-    parser.add_argument("--fuzz-report", type=str, default="fuzz_report.json",
-                        help="File del report del fuzzer")
-    parser.add_argument("--output", type=str, default="critic_feedback.json",
-                        help="File JSON di output per il feedback")
+    parser = argparse.ArgumentParser(description="Critic - Revisione critica specifica funzionale")
+    parser.add_argument("--fuzz-report", type=str, default="output/fuzz_report.json",
+                        help="Fuzz report JSON file")
+    parser.add_argument("--spec", type=str, default="output/spec/spec.md",
+                        help="Spec file for context")
+    parser.add_argument("--machine", type=str, default="output/spec/spec_machine.json",
+                        help="State machine JSON file")
+    parser.add_argument("--output", type=str, default="output/critic_feedback.json",
+                        help="Output JSON file (default: output/critic_feedback.json)")
+    parser.add_argument("--use-llm", action="store_true",
+                        help="Force LLM usage even if static analysis is available")
     args = parser.parse_args()
     
-    # Check file
+    # Carica fuzz report
     if not os.path.exists(args.fuzz_report):
-        print(f"Errore: File non trovato: {args.fuzz_report}")
-        print("Esegui prima 'python fuzzer.py' per generare il report")
+        print(f"⚠️  Fuzz report not found: {args.fuzz_report}")
+        print("   Creating empty report...")
+        fuzz_report = {"summary": {}, "bugs": [], "unreachable_states": []}
+    else:
+        with open(args.fuzz_report, "r", encoding="utf-8") as f:
+            fuzz_report = json.load(f)
+    
+    # Carica spec
+    spec_text = ""
+    if os.path.exists(args.spec):
+        with open(args.spec, "r", encoding="utf-8") as f:
+            spec_text = f.read()
+    
+    # Carica machine
+    if not os.path.exists(args.machine):
+        print(f"Error: Machine file not found: {args.machine}")
         sys.exit(1)
+    with open(args.machine, "r", encoding="utf-8") as f:
+        machine = json.load(f)
     
-    print("=" * 50)
-    print("CRITIC - Analisi Feedback UX")
-    print("=" * 50)
-    print(f"Report: {args.fuzz_report}")
-    print(f"Output: {args.output}")
-    print()
+    print(f"🧐 Critic analyzing...")
+    print(f"   Fuzz bugs: {len(fuzz_report.get('bugs', []))}")
+    print(f"   Spec size: {len(spec_text)} chars")
+    print(f"   States: {len(machine.get('states', {}))}")
     
-    # Esegui analisi
-    metrics = run_critic(args.fuzz_report, args.output)
+    # Prova LLM prima se richiesto o se ci sono bug
+    llm_result = None
+    if args.use_llm or fuzz_report.get("summary", {}).get("bugs_found", 0) > 0:
+        print(f"\n  🤖 Trying LLM critic...")
+        llm_result = call_llm_critic(fuzz_report, spec_text, machine)
     
-    # Stampa risultati
-    print()
-    print("=" * 50)
-    print("ANALISI CRITIC COMPLETATA")
-    print("=" * 50)
-    print(f"Totale issue:       {metrics['total_issues']}")
-    print(f"Issue critiche:     {metrics['critical_issues']}")
-    print(f"Decisioni UX:       {metrics['ux_decisions_needed']}")
-    print(f"Raccomandazioni:    {metrics['recommendations']}")
-    print(f"Tempo:              {metrics['elapsed_seconds']:.1f}s")
-    print()
-    print(f"Output: {metrics['output_file']}")
-    print()
-    print("Prossimo step: Review del feedback o esecuzione loop.py")
+    # Fallback su analisi statica
+    if llm_result:
+        print(f"  ✅ LLM critic succeeded")
+        report = llm_result
+    else:
+        print(f"  📊 Using static critic analysis")
+        report = static_critic_analysis(fuzz_report, machine)
+    
+    # Aggiungi metadata
+    report["metadata"] = {
+        "timestamp": datetime.now().isoformat(),
+        "method": "llm" if llm_result else "static",
+        "fuzz_report_used": os.path.exists(args.fuzz_report),
+        "spec_used": os.path.exists(args.spec),
+    }
+    
+    print_critic_report(report)
+    
+    # Salva output
+    output_file = args.output
+    os.makedirs(os.path.dirname(output_file) if os.path.dirname(output_file) else ".", exist_ok=True)
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2)
+    
+    print(f"\n📄 Critic feedback saved: {output_file}")
+    
+    # Count critical issues
+    critical_count = len(report.get("critical_issues", []))
+    sys.exit(0 if critical_count == 0 else 1)
 
 
 if __name__ == "__main__":
