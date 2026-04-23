@@ -1,0 +1,37 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+worktrees/
+results/
+queue/
+
+# Agent prompt files (generated per-session by launchers)
+CLAUDE.md
+AGENTS.md
+
+# Experimental code/artifacts
+dev/
+
+# Results file
+results.tsv
+
+# User input files (except example)
+inputs/*
+!inputs/example.txt
+
+# Generated output files
+output/spec.md
+output/spec_machine.json
+output/fuzz_report.json
+output/critic_feedback.json
+output/analyst_suggestions.json
+output/project_context.md
+output/loop_checkpoints/
+output/completeness_report.json

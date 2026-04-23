@@ -1,0 +1,14 @@
+# Autoresearch Functional Analysis - Dependencies
+
+# Core
+pydantic>=2.0.0
+openai>=1.0.0
+
+# Pattern injection e processing
+beautifulsoup4>=4.12.0
+
+# Utility
+networkx>=3.0  # Per analisi grafi nel fuzzer
+
+# Opzionale: instructor per output strutturato (se supportato dal modello)
+# instructor>=1.0.0
