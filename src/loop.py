@@ -80,7 +80,7 @@ class AutonomousLoop:
         self.spec_machine = os.path.join(SPEC_DIR, "spec_machine.json")
         self.fuzz_report = os.path.join(OUTPUT_DIR, "fuzz_report.json")
         self.critic_feedback = os.path.join(OUTPUT_DIR, "critic_feedback.json")
-        self.completeness_report = os.path.join(OUTPUT_DIR, "completeness_report.json")
+
         
         # State
         self.iteration = 0
@@ -652,7 +652,7 @@ class AutonomousLoop:
 
 def main():
     parser = argparse.ArgumentParser(description="Autonomous loop for functional analysis")
-    parser.add_argument("--context", type=str, default="project_context.md",
+    parser.add_argument("--context", type=str, default="output/context/project_context.md",
                         help="Context file to analyze")
     parser.add_argument("--input-dir", type=str, default=None,
                         help="Input directory (if provided, runs automatic ingest)")

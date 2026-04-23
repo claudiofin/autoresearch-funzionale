@@ -18,11 +18,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import LLM_CONFIG, DEFAULT_PROVIDER
+
 # LLM Configuration
-LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai")  # openai, anthropic, ollama
-LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-4o")  # or "claude-3-5-sonnet-20241022", "llama3"
-LLM_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "")  # For Ollama or other providers
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", DEFAULT_PROVIDER)
+LLM_MODEL = os.environ.get("LLM_MODEL", "")
+LLM_API_KEY = os.environ.get("LLM_API_KEY", os.environ.get("OPENAI_API_KEY", ""))
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "")
 
 
 def load_machine(path: str) -> dict:
@@ -119,30 +122,37 @@ Respond ONLY with the file content (YAML + Markdown), without introducing with p
 
 def call_llm(prompt: str, system_prompt: str = "", max_tokens: int = 4096) -> str:
     """Calls the configured LLM and returns the response."""
-    if LLM_PROVIDER == "openai":
-        return _call_openai(prompt, system_prompt, max_tokens)
+    if LLM_PROVIDER == "openai" or LLM_PROVIDER == "google" or LLM_PROVIDER == "dashscope":
+        return _call_openai_compatible(prompt, system_prompt, max_tokens)
     elif LLM_PROVIDER == "anthropic":
         return _call_anthropic(prompt, system_prompt, max_tokens)
     elif LLM_PROVIDER == "ollama":
         return _call_ollama(prompt, system_prompt, max_tokens)
-    elif LLM_PROVIDER == "dashscope":
-        return _call_dashscope(prompt, system_prompt, max_tokens)
     else:
         raise ValueError(f"Unsupported LLM provider: {LLM_PROVIDER}")
 
 
-def _call_openai(prompt: str, system_prompt: str, max_tokens: int) -> str:
-    """Calls OpenAI API."""
+def _call_openai_compatible(prompt: str, system_prompt: str, max_tokens: int) -> str:
+    """Calls any OpenAI-compatible API (OpenAI, DashScope, Google Gemini)."""
     try:
         from openai import OpenAI
-        client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL or None)
+        
+        # Load specific config if exists
+        base_url = LLM_BASE_URL
+        model = LLM_MODEL
+        if not base_url and LLM_PROVIDER in LLM_CONFIG:
+            base_url = LLM_CONFIG[LLM_PROVIDER]["base_url"]
+        if not model and LLM_PROVIDER in LLM_CONFIG:
+            model = LLM_CONFIG[LLM_PROVIDER]["model"]
+            
+        client = OpenAI(api_key=LLM_API_KEY, base_url=base_url or None)
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
         
         response = client.chat.completions.create(
-            model=LLM_MODEL,
+            model=model or "gpt-4o",
             messages=messages,
             max_tokens=max_tokens,
             temperature=0.7,
@@ -152,7 +162,7 @@ def _call_openai(prompt: str, system_prompt: str, max_tokens: int) -> str:
         print("❌ Install openai: pip install openai")
         sys.exit(1)
     except Exception as e:
-        print(f"❌ OpenAI Error: {e}")
+        print(f"❌ OpenAI-compatible API Error ({LLM_PROVIDER}): {e}")
         sys.exit(1)
 
 
@@ -162,8 +172,12 @@ def _call_anthropic(prompt: str, system_prompt: str, max_tokens: int) -> str:
         from anthropic import Anthropic
         client = Anthropic(api_key=LLM_API_KEY)
         
+        model = LLM_MODEL
+        if not model and "anthropic" in LLM_CONFIG:
+            model = LLM_CONFIG["anthropic"]["model"]
+        
         response = client.messages.create(
-            model=LLM_MODEL,
+            model=model or "claude-3-5-sonnet-20241022",
             max_tokens=max_tokens,
             system=system_prompt,
             messages=[{"role": "user", "content": prompt}],
@@ -183,7 +197,7 @@ def _call_ollama(prompt: str, system_prompt: str, max_tokens: int) -> str:
         import requests
         url = LLM_BASE_URL or "http://localhost:11434"
         payload = {
-            "model": LLM_MODEL,
+            "model": LLM_MODEL or "llama3",
             "prompt": prompt,
             "system": system_prompt,
             "stream": False,
@@ -203,30 +217,6 @@ def _call_ollama(prompt: str, system_prompt: str, max_tokens: int) -> str:
         sys.exit(1)
 
 
-def _call_dashscope(prompt: str, system_prompt: str, max_tokens: int) -> str:
-    """Calls DashScope API (Alibaba Cloud)."""
-    try:
-        from openai import OpenAI
-        base_url = LLM_BASE_URL or "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        client = OpenAI(api_key=LLM_API_KEY, base_url=base_url)
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
-        
-        response = client.chat.completions.create(
-            model=LLM_MODEL or "qwen-plus",
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=0.7,
-        )
-        return response.choices[0].message.content
-    except ImportError:
-        print("❌ Install openai: pip install openai")
-        sys.exit(1)
-    except Exception as e:
-        print(f"❌ DashScope Error: {e}")
-        sys.exit(1)
 
 
 def generate_state_spec_llm(state_name: str, state_def: dict, machine: dict, context: str, spec: str, design_system: str = "") -> str:
@@ -346,20 +336,47 @@ Do not add markdown like ```json, just print the array.
         else:
             raise ValueError("JSON not found")
     except Exception as e:
-        print(f"  ⚠️  discover_screens error: {e}, using default fallback")
-        return [
-            {"name": "01_login", "states": ["app_idle", "loading_auth", "error_auth", "session_expired", "access_denied"]},
-            {"name": "02_dashboard", "states": ["dashboard_ready", "loading_dashboard", "empty", "general_error", "loading"]},
-            {"name": "03_catalog", "states": ["catalog_ready", "loading_catalog"]},
-            {"name": "04_offers", "states": ["offers_ready", "loading_offers", "group_in_progress"]},
-            {"name": "05_benchmark", "states": ["benchmark_ready", "loading_benchmark"]}
-        ]
+        print(f"  ⚠️  discover_screens error: {e}, using dynamic fallback based on actual machine states")
+        all_states = list(machine.get("states", {}).keys())
+        # Group states logically: auth-related, loading states, success/content states, error states
+        auth_states = [s for s in all_states if any(k in s.lower() for k in ["idle", "auth", "session", "expired"])]
+        loading_states = [s for s in all_states if "loading" in s.lower() or s == "initial"]
+        content_states = [s for s in all_states if any(k in s.lower() for k in ["success", "dashboard", "catalog", "offers", "benchmark", "groups"])]
+        error_states = [s for s in all_states if any(k in s.lower() for k in ["error", "empty"])]
+        
+        fallback = []
+        if auth_states:
+            fallback.append({"name": "01_auth", "states": auth_states})
+        if loading_states:
+            fallback.append({"name": "02_loading", "states": loading_states})
+        if content_states:
+            fallback.append({"name": "03_content", "states": content_states})
+        if error_states:
+            fallback.append({"name": "04_errors", "states": error_states})
+        
+        # If no groups found, just use all states as one screen
+        if not fallback:
+            fallback.append({"name": "01_main", "states": all_states})
+        
+        return fallback
+
+
+def _flatten_states(states: dict) -> dict:
+    """Flattens nested states into a single dict with dot-notation keys."""
+    flat = {}
+    for name, defn in states.items():
+        flat[name] = defn
+        if "states" in defn:
+            for sub_name, sub_defn in defn["states"].items():
+                flat[f"{name}.{sub_name}"] = sub_defn
+    return flat
 
 
 def generate_screen_spec_llm(screen_name: str, related_states: list, machine: dict, context: str, spec: str, design_system: str = "") -> str:
     """Generates UI spec for a real screen using the LLM."""
     
-    states_info = {state_name: machine["states"][state_name] for state_name in related_states if state_name in machine.get("states", {})}
+    all_states = _flatten_states(machine.get("states", {}))
+    states_info = {state_name: all_states[state_name] for state_name in related_states if state_name in all_states}
     
     # Design System instructions
     design_instructions = ""
@@ -480,7 +497,7 @@ def main():
     parser.add_argument("--context", default="output/context/project_context.md", help="Path to project_context.md")
     parser.add_argument("--spec", default="output/spec/spec.md", help="Path to spec.md")
     parser.add_argument("--output-dir", default="output/ui_specs", help="Output directory")
-    parser.add_argument("--provider", choices=["openai", "anthropic", "ollama", "dashscope"], default=LLM_PROVIDER, help="LLM Provider")
+    parser.add_argument("--provider", choices=["openai", "anthropic", "google", "ollama", "dashscope"], default=LLM_PROVIDER, help="LLM Provider")
     parser.add_argument("--model", default=LLM_MODEL, help="LLM Model")
     parser.add_argument("--api-key", default=LLM_API_KEY, help="LLM API Key")
     parser.add_argument("--base-url", default=LLM_BASE_URL, help="LLM Base URL")

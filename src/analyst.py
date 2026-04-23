@@ -9,7 +9,7 @@ LLM is REQUIRED - no simulated fallback.
 Output: Validated JSON.
 
 Usage:
-    python run.py analyst --context output/project_context.md --output output/analyst_suggestions.json
+    python run.py analyst --context output/context/project_context.md --output output/analyst/analyst_suggestions.json
     
 Environment Variables:
     LLM_API_KEY: Your API key (REQUIRED)
@@ -24,7 +24,6 @@ import json
 import argparse
 from datetime import datetime
 
-import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import LLM_CONFIG, DEFAULT_PROVIDER
 
@@ -203,7 +202,7 @@ Verification: for each state you generate, ask yourself "how does the user exit 
 
 def main():
     parser = argparse.ArgumentParser(description="Analyst LLM for functional analysis")
-    parser.add_argument("--context", type=str, default="output/project_context.md",
+    parser.add_argument("--context", type=str, default="output/context/project_context.md",
                         help="Context file")
     parser.add_argument("--output", type=str, default="output/analyst/analyst_suggestions.json",
                         help="Output JSON file")

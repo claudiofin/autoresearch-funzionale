@@ -11,7 +11,7 @@ ITERATIVE APPROACH:
   - Validator errors (dead-end states, unreachable states)
 
 Usage:
-    python run.py spec --context output/project_context.md
+    python run.py spec --context output/context/project_context.md
     
 Environment Variables:
     LLM_API_KEY: Your API key (REQUIRED)
@@ -28,7 +28,6 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 
-import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import LLM_CONFIG, DEFAULT_PROVIDER
 
@@ -299,7 +298,9 @@ Respond ONLY with valid JSON:
   "transitions": [{{"from_state": "...", "to_state": "...", "event": "UPPER_CASE", "guard": null}}],
   "edge_cases": [{{"id": "EC001", "scenario": "...", "trigger": "...", "expected_behavior": "...", "priority": "high"}}],
   "flows": [{{"name": "...", "steps": [{{"trigger": "...", "action": "...", "expected_outcome": "...", "error_scenario": "..."}}]}}],
-  "api_endpoints": [{{"method": "GET", "path": "...", "description": "..."}}]
+  "api_endpoints": [{{"method": "GET", "path": "...", "description": "..."}}],
+  "error_handling": [{{"code": 404, "type": "Not Found", "message": "User friendly message", "action": "Return home"}}],
+  "data_validation": [{{"field": "email", "type": "string", "required": true, "pattern": "RFC 5322", "max_length": 254}}]
 }}
 
 Rules:
@@ -555,10 +556,32 @@ def run_analysis(context_file: str, output_file: str, time_budget: int,
         endpoints_md += f"\n#### {ep['method']} {ep['path']}\n"
         endpoints_md += f"- **Description**: {ep.get('description', '')}\n"
     
+    # Error Handling Table
+    error_handling = llm_data.get("error_handling", [])
+    if error_handling:
+        error_handling_md = "| Code | Type | User Message | Action |\n|--------|------|------------------|--------|\n"
+        for err in error_handling:
+            error_handling_md += f"| {err.get('code', '')} | {err.get('type', '')} | \"{err.get('message', '')}\" | {err.get('action', '')} |\n"
+    else:
+        # Fallback se array vuoto
+        error_handling_md = "| Code | Type | User Message | Action |\n|--------|------|------------------|--------|\n"
+        error_handling_md += "| 500 | Generic Error | \"Si è verificato un errore.\" | Riprova |\n"
+
+    # Data Validation Table
+    data_validation = llm_data.get("data_validation", [])
+    if data_validation:
+        data_validation_md = "| Field | Type | Required | Pattern | Max Length |\n|-------|------|--------------|---------|------------|\n"
+        for val in data_validation:
+            req = "Yes" if val.get('required') else "No"
+            data_validation_md += f"| {val.get('field', '')} | {val.get('type', '')} | {req} | {val.get('pattern', '')} | {val.get('max_length', '')} |\n"
+    else:
+        data_validation_md = "*No data validation fields specified.*"
+    
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     states_count = len(machine['states'])
     transitions_count = sum(len(s.get('on', {})) for s in machine['states'].values())
     edge_cases_count = len(edge_cases)
+    error_types_count = len(error_handling) if error_handling else 1
     
     # Build spec
     spec_content = f"""# Functional Specification
@@ -619,16 +642,7 @@ Generated: {timestamp}
 
 ### 6.1 Error Types
 
-| Code | Type | User Message | Action |
-|--------|------|------------------|--------|
-| 400 | Bad Request | "Invalid data." | Fix input |
-| 401 | Unauthorized | "Session expired." | Login |
-| 403 | Forbidden | "Access denied." | Contact support |
-| 404 | Not Found | "Resource not found." | Return to home |
-| 408 | Timeout | "Request timed out." | Retry |
-| 429 | Rate Limited | "Too many requests." | Wait |
-| 500 | Server Error | "Temporary error." | Retry |
-| 503 | Unavailable | "Service unavailable." | Retry later |
+{error_handling_md}
 
 ### 6.2 Error States
 
@@ -643,12 +657,7 @@ The state machine handles errors through dedicated states that:
 
 ### 7.1 Validation Rules
 
-| Field | Type | Required | Pattern | Max Length |
-|-------|------|--------------|---------|------------|
-| email | email | Yes | RFC 5322 | 254 |
-| password | password | Yes | Min 8 chars | 128 |
-| search_query | string | Yes | Alphanumeric + spaces | 100 |
-| quantity | integer | Yes | > 0 | 9999 |
+{data_validation_md}
 
 ### 7.2 Validation Feedback
 
@@ -670,7 +679,7 @@ The state machine handles errors through dedicated states that:
 - States defined: {states_count}
 - Transitions defined: {transitions_count}
 - Edge cases identified: {edge_cases_count}
-- Error types handled: 8
+- Error types handled: {error_types_count}
 
 ---
 
@@ -694,7 +703,7 @@ The original project context is in `project_context.md`.
         "states_count": len(machine["states"]),
         "transitions_count": sum(len(s.get("on", {})) for s in machine["states"].values()),
         "edge_cases_count": edge_cases_count,
-        "error_types_count": 8,
+        "error_types_count": error_types_count,
         "elapsed_seconds": elapsed,
         "spec_file": output_file,
         "machine_file": xstate_file,

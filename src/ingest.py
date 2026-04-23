@@ -24,7 +24,6 @@ from datetime import datetime
 
 from bs4 import BeautifulSoup
 
-import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import LLM_CONFIG, DEFAULT_PROVIDER
 
