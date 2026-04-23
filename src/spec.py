@@ -310,7 +310,7 @@ Rules:
 5. ON_ERROR transition: single event for all error types (network, timeout, server error)
 6. CANCEL transition: use guard "hasPreviousState" to return to previous state (e.g., success during refresh), otherwise to app_idle
 7. RETRY_FETCH in error state: MUST have guard "canRetry" (context.retryCount < 3)
-8. When retry fails, use assign action to increment retryCount: { "type": "assign", "expr": "context.retryCount + 1" }
+8. When retry fails, use assign action to increment retryCount
 9. After 3 failed retries, transition to "session_expired" or "max_retries_exceeded" state
 10. Cover: auth, core flow, error handling, empty states
 11. Initial state: app_idle (MUST exist)
@@ -318,10 +318,10 @@ Rules:
 13. All states must be reachable from app_idle
 
 TRANSITION FORMAT:
-- Simple: { "EVENT": "target_state" }
-- With guard: { "EVENT": { "target": "target_state", "cond": "guardName" } }
-- With actions: { "EVENT": { "target": "target_state", "actions": ["actionName"] } }
-- With guard and actions: { "EVENT": { "target": "target_state", "cond": "guardName", "actions": ["actionName"] } }
+- Simple: EVENT -> target_state
+- With guard: EVENT with cond guardName -> target_state
+- With actions: EVENT with actions [actionName] -> target_state
+- With guard and actions: EVENT with cond guardName and actions [actionName] -> target_state
 """
     
     print(f"  🤖 Calling LLM for spec ({model}), context: {len(context_text)} chars...")

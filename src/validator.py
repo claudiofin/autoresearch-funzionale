@@ -50,6 +50,32 @@ def find_dead_end_states(machine: dict) -> list[dict]:
     return dead_ends
 
 
+def _extract_targets(target) -> list:
+    """Extract target state names from transition.
+    
+    Handles:
+    - Simple string: "success" -> ["success"]
+    - Dict with guard: {"target": "success", "cond": "hasData"} -> ["success"]
+    - Array of conditions: [{"target": "success", "cond": "hasData"}, {"target": "empty"}] -> ["success", "empty"]
+    """
+    if isinstance(target, str):
+        return [target]
+    elif isinstance(target, dict):
+        t = target.get("target", "")
+        return [t] if t else []
+    elif isinstance(target, list):
+        targets = []
+        for item in target:
+            if isinstance(item, dict):
+                t = item.get("target", "")
+                if t:
+                    targets.append(t)
+            elif isinstance(item, str):
+                targets.append(item)
+        return targets
+    return []
+
+
 def _suggest_exit_transitions(state_name: str) -> str:
     """Suggest exit transitions based on state name."""
     name = state_name.lower()
@@ -86,11 +112,10 @@ def find_unreachable_states(machine: dict) -> list[dict]:
         if current in states:
             transitions = states[current].get("on", {})
             for event, target in transitions.items():
-                if isinstance(target, dict):
-                    target = target.get("target", target)
-                if target not in reachable:
-                    reachable.add(target)
-                    queue.append(target)
+                for t in _extract_targets(target):
+                    if t not in reachable:
+                        reachable.add(t)
+                        queue.append(t)
     
     unreachable = []
     for state_name in states:
@@ -112,17 +137,15 @@ def find_invalid_transitions(machine: dict) -> list[dict]:
     for state_name, state_config in states.items():
         transitions = state_config.get("on", {})
         for event, target in transitions.items():
-            if isinstance(target, dict):
-                target = target.get("target", "")
-            
-            if target and target not in states:
-                invalid.append({
-                    "from_state": state_name,
-                    "event": event,
-                    "target": target,
-                    "issue": "INVALID_TARGET",
-                    "description": f"Transition '{event}' from '{state_name}' points to '{target}' which does not exist"
-                })
+            for t in _extract_targets(target):
+                if t and t not in states:
+                    invalid.append({
+                        "from_state": state_name,
+                        "event": event,
+                        "target": t,
+                        "issue": "INVALID_TARGET",
+                        "description": f"Transition '{event}' from '{state_name}' points to '{t}' which does not exist"
+                    })
     
     return invalid
 
@@ -135,28 +158,24 @@ def find_potential_infinite_loops(machine: dict) -> list[dict]:
     for state_name, state_config in states.items():
         transitions = state_config.get("on", {})
         for event, target in transitions.items():
-            if isinstance(target, dict):
-                target = target.get("target", "")
-            
-            if target and target in states:
-                # Check if there's a reverse transition
-                target_transitions = states[target].get("on", {})
-                for reverse_event, reverse_target in target_transitions.items():
-                    if isinstance(reverse_target, dict):
-                        reverse_target = reverse_target.get("target", "")
-                    
-                    if reverse_target == state_name:
-                        # Cycle found: state_name ↔ target
-                        # Check if at least one of them has an exit
-                        has_exit_from_source = len(transitions) > 1
-                        has_exit_from_target = len(target_transitions) > 1
-                        
-                        if not has_exit_from_source or not has_exit_from_target:
-                            loops.append({
-                                "cycle": [state_name, target],
-                                "issue": "POTENTIAL_INFINITE_LOOP",
-                                "description": f"Bidirectional cycle: {state_name} ↔ {target}. One of the two states has no other exits."
-                            })
+            for t in _extract_targets(target):
+                if t and t in states:
+                    # Check if there's a reverse transition
+                    target_transitions = states[t].get("on", {})
+                    for reverse_event, reverse_target in target_transitions.items():
+                        for rt in _extract_targets(reverse_target):
+                            if rt == state_name:
+                                # Cycle found: state_name ↔ t
+                                # Check if at least one of them has an exit
+                                has_exit_from_source = len(transitions) > 1
+                                has_exit_from_target = len(target_transitions) > 1
+                                
+                                if not has_exit_from_source or not has_exit_from_target:
+                                    loops.append({
+                                        "cycle": [state_name, t],
+                                        "issue": "POTENTIAL_INFINITE_LOOP",
+                                        "description": f"Bidirectional cycle: {state_name} ↔ {t}. One of the two states has no other exits."
+                                    })
     
     return loops
 

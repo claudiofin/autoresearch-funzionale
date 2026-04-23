@@ -40,6 +40,32 @@ def get_all_states(machine: dict) -> set:
     return set(machine.get("states", {}).keys())
 
 
+def _extract_targets(target) -> list:
+    """Extract target state names from transition.
+    
+    Handles:
+    - Simple string: "success" -> ["success"]
+    - Dict with guard: {"target": "success", "cond": "hasData"} -> ["success"]
+    - Array of conditions: [{"target": "success", "cond": "hasData"}, {"target": "empty"}] -> ["success", "empty"]
+    """
+    if isinstance(target, str):
+        return [target]
+    elif isinstance(target, dict):
+        t = target.get("target", "")
+        return [t] if t else []
+    elif isinstance(target, list):
+        targets = []
+        for item in target:
+            if isinstance(item, dict):
+                t = item.get("target", "")
+                if t:
+                    targets.append(t)
+            elif isinstance(item, str):
+                targets.append(item)
+        return targets
+    return []
+
+
 def find_reachable_states(machine: dict) -> set:
     """Find all states reachable from initial state (BFS)."""
     states = machine.get("states", {})
@@ -56,13 +82,20 @@ def find_reachable_states(machine: dict) -> set:
         current = queue.popleft()
         if current in states:
             for event, target in states[current].get("on", {}).items():
-                if isinstance(target, dict):
-                    target = target.get("target", "")
-                if target and target not in reachable:
-                    reachable.add(target)
-                    queue.append(target)
+                for t in _extract_targets(target):
+                    if t and t not in reachable:
+                        reachable.add(t)
+                        queue.append(t)
     
     return reachable
+
+
+def _pick_random_target(target) -> str:
+    """Pick a random target from a transition (handles arrays with guards)."""
+    targets = _extract_targets(target)
+    if not targets:
+        return ""
+    return random.choice(targets)
 
 
 def simulate_path(machine: dict, max_steps: int = 50) -> dict:
@@ -91,10 +124,7 @@ def simulate_path(machine: dict, max_steps: int = 50) -> dict:
         
         # Choose random event
         event = random.choice(list(transitions.keys()))
-        target = transitions[event]
-        
-        if isinstance(target, dict):
-            target = target.get("target", "")
+        target = _pick_random_target(transitions[event])
         
         if not target:
             return {
@@ -151,10 +181,9 @@ def detect_loops(machine: dict) -> list:
         path.append(state)
         
         for event, target in states.get(state, {}).get("on", {}).items():
-            if isinstance(target, dict):
-                target = target.get("target", "")
-            if target and target in states:
-                dfs(target, visited.copy(), path.copy())
+            for t in _extract_targets(target):
+                if t and t in states:
+                    dfs(t, visited.copy(), path.copy())
     
     initial = machine.get("initial", "")
     if initial in states:
