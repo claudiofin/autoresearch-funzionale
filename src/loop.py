@@ -34,6 +34,9 @@ OUTPUT_DIR = "./output"
 DEFAULT_CHECKPOINT_DIR = "./output/loop_checkpoints"
 FORCE_ALL_ITERATIONS = False  # Se True, forza tutte le iterazioni anche senza errori
 
+# Directory degli script (src/ se eseguito dalla root, . se eseguito da src/)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # ---------------------------------------------------------------------------
 # Loop Coordinator
 # ---------------------------------------------------------------------------
@@ -197,8 +200,9 @@ class AutonomousLoop:
         """Esegue l'Ingest per generare il contesto dagli input."""
         try:
             env = os.environ.copy()
+            script = os.path.join(SCRIPT_DIR, "ingest.py")
             result = subprocess.run(
-                ["python3", "ingest.py", "--input-dir", self.input_dir, "--output-file", self.context_file],
+                ["python3", script, "--input-dir", self.input_dir, "--output-file", self.context_file],
                 capture_output=True,
                 text=True,
                 timeout=300,
@@ -224,8 +228,9 @@ class AutonomousLoop:
         """Esegue l'Analyst."""
         try:
             env = os.environ.copy()
+            script = os.path.join(SCRIPT_DIR, "analyst.py")
             result = subprocess.run(
-                ["python3", "analyst.py", "--context", self.context_file],
+                ["python3", script, "--context", self.context_file],
                 capture_output=True,
                 text=True,
                 timeout=120,
@@ -258,8 +263,9 @@ class AutonomousLoop:
         """Esegue la generazione della spec."""
         try:
             env = os.environ.copy()
+            script = os.path.join(SCRIPT_DIR, "spec.py")
             result = subprocess.run(
-                ["python3", "spec.py", "--context", self.context_file],
+                ["python3", script, "--context", self.context_file],
                 capture_output=True,
                 text=True,
                 timeout=120,
@@ -293,8 +299,9 @@ class AutonomousLoop:
         """Esegue il completeness check e legge il report JSON."""
         try:
             env = os.environ.copy()
+            script = os.path.join(SCRIPT_DIR, "completeness.py")
             result = subprocess.run(
-                ["python3", "completeness.py", "--spec", self.spec_output, "--machine", self.spec_machine, "--context", self.context_file, "--fix"],
+                ["python3", script, "--spec", self.spec_output, "--machine", self.spec_machine, "--context", self.context_file, "--fix"],
                 capture_output=True,
                 text=True,
                 timeout=120,
@@ -332,8 +339,9 @@ class AutonomousLoop:
         """Esegue il Fuzzer."""
         try:
             env = os.environ.copy()
+            script = os.path.join(SCRIPT_DIR, "fuzzer.py")
             result = subprocess.run(
-                ["python3", "fuzzer.py", "--machine", self.spec_machine],
+                ["python3", script, "--machine", self.spec_machine],
                 capture_output=True,
                 text=True,
                 timeout=300,
@@ -363,8 +371,9 @@ class AutonomousLoop:
         """Esegue il Critic."""
         try:
             env = os.environ.copy()
+            script = os.path.join(SCRIPT_DIR, "critic.py")
             result = subprocess.run(
-                ["python3", "critic.py", "--fuzz-report", self.fuzz_report],
+                ["python3", script, "--fuzz-report", self.fuzz_report],
                 capture_output=True,
                 text=True,
                 timeout=60,
