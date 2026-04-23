@@ -458,33 +458,51 @@ def _extract_plantuml_targets(target) -> list:
 
 
 def generate_plantuml(machine: dict) -> str:
-    """Generates PlantUML flat syntax code."""
-    uml = "@startuml\n"
-    uml += "skinparam state {\n"
-    uml += "  BackgroundColor #E8F5E9\n"
-    uml += "  BorderColor #2E7D32\n"
-    uml += "  ArrowColor #1B5E20\n"
-    uml += "}\n\n"
+    """Generates PlantUML code with hierarchical layout."""
+    uml = ["@startuml"]
+    uml.append("skinparam state {")
+    uml.append("  BackgroundColor #E8F5E9")
+    uml.append("  BorderColor #2E7D32")
+    uml.append("  ArrowColor #1B5E20")
+    uml.append("}\n")
     
     initial = machine.get("initial", "")
     if initial:
-        uml += f"[*] --> {initial}\n\n"
+        uml.append(f"[*] --> {initial}\n")
     
-    # Flat Syntax: States first
-    for state_name, state_def in machine.get("states", {}).items():
-        uml += f"state {state_name}\n"
+    def _render_states(states: dict, indent=""):
+        res = []
+        for state_name, state_config in states.items():
+            sub_states = state_config.get("states", {})
+            if sub_states:
+                res.append(f"{indent}state {state_name} {{")
+                sub_initial = state_config.get("initial", "")
+                if sub_initial:
+                    res.append(f"{indent}  [*] --> {sub_initial}")
+                res.extend(_render_states(sub_states, indent + "  "))
+                res.append(f"{indent}}}")
+            else:
+                res.append(f"{indent}state {state_name}")
+        return res
         
-    uml += "\n' Transitions\n"
+    def _render_transitions(states: dict, indent=""):
+        res = []
+        for state_name, state_config in states.items():
+            transitions = state_config.get("on", {})
+            for event, target in transitions.items():
+                for dest in _extract_plantuml_targets(target):
+                    dest = dest.lstrip('.')
+                    res.append(f"{indent}{state_name} --> {dest} : {event}")
+            if "states" in state_config:
+                res.extend(_render_transitions(state_config["states"], indent))
+        return res
+
+    uml.extend(_render_states(machine.get("states", {})))
+    uml.append("\n' Transitions\n")
+    uml.extend(_render_transitions(machine.get("states", {})))
     
-    # Flat Syntax: Then arrows
-    for state_name, state_def in machine.get("states", {}).items():
-        transitions = state_def.get("on", {})
-        for event, target in transitions.items():
-            for dest in _extract_plantuml_targets(target):
-                uml += f"{state_name} --> {dest} : {event}\n"
-    
-    uml += "@enduml"
-    return uml
+    uml.append("@enduml")
+    return "\n".join(uml)
 
 
 def main():

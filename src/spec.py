@@ -56,45 +56,79 @@ def generate_base_machine() -> dict:
 # ---------------------------------------------------------------------------
 
 def generate_plantuml_statechart(machine: dict) -> str:
-    """Convert XState machine to PlantUML state diagram (flat layout)."""
+    """Convert XState machine to PlantUML state diagram (hierarchical layout)."""
     lines = ["@startuml", ""]
     
-    # Initial transition
-    lines.append(f'    [*] --> {machine["initial"]}')
-    lines.append("")
-    
-    for state_name, state_config in machine["states"].items():
-        entry_actions = state_config.get("entry", [])
-        exit_actions = state_config.get("exit", [])
-        
-        # State with notes
-        if entry_actions or exit_actions:
-            lines.append(f'    state "{state_name}" {{')
+    def _render_states(states: dict, indent: str = "    ") -> list:
+        out = []
+        for state_name, state_config in states.items():
+            entry_actions = state_config.get("entry", [])
+            exit_actions = state_config.get("exit", [])
+            sub_states = state_config.get("states", {})
+            
+            note_lines = []
             if entry_actions:
-                lines.append(f'        note: Entry: {", ".join(entry_actions)}')
+                note_lines.append(f'{indent}    note: Entry: {", ".join(entry_actions)}')
             if exit_actions:
-                lines.append(f'        note: Exit: {", ".join(exit_actions)}')
-        else:
-            lines.append(f'    state "{state_name}"')
-        
-        # Transitions
-        transitions = state_config.get("on", {})
-        if transitions:
+                note_lines.append(f'{indent}    note: Exit: {", ".join(exit_actions)}')
+                
+            if sub_states:
+                out.append(f'{indent}state "{state_name}" {{')
+                for note in note_lines:
+                    out.append(note)
+                initial_sub = state_config.get("initial", "")
+                if initial_sub:
+                    out.append(f'{indent}    [*] --> {initial_sub}')
+                out.extend(_render_states(sub_states, indent + "    "))
+                out.append(f'{indent}}}')
+            else:
+                if note_lines:
+                    out.append(f'{indent}state "{state_name}" {{')
+                    for note in note_lines:
+                        out.append(note)
+                    out.append(f'{indent}}}')
+                else:
+                    out.append(f'{indent}state "{state_name}"')
+        return out
+
+    def _render_transitions(states: dict, indent: str = "    ") -> list:
+        out = []
+        for state_name, state_config in states.items():
+            transitions = state_config.get("on", {})
             for event, target in transitions.items():
                 if isinstance(target, dict):
-                    target_state = target.get("target", "unknown")
-                    guard = target.get("guard", "")
+                    target_state = target.get("target", "unknown").lstrip('.')
+                    guard = target.get("guard", "") or target.get("cond", "")
                     if guard:
-                        lines.append(f"        {state_name} --> {target_state} : {event} [{guard}]")
+                        out.append(f"{indent}{state_name} --> {target_state} : {event} [{guard}]")
                     else:
-                        lines.append(f"        {state_name} --> {target_state} : {event}")
-                else:
-                    lines.append(f"        {state_name} --> {target} : {event}")
-        
-        lines.append("")
+                        out.append(f"{indent}{state_name} --> {target_state} : {event}")
+                elif isinstance(target, str):
+                    target_state = target.lstrip('.')
+                    out.append(f"{indent}{state_name} --> {target_state} : {event}")
+                elif isinstance(target, list):
+                    for t in target:
+                        target_state = t.get("target", "unknown").lstrip('.') if isinstance(t, dict) else t.lstrip('.')
+                        guard = t.get("cond", "") if isinstance(t, dict) else ""
+                        if guard:
+                            out.append(f"{indent}{state_name} --> {target_state} : {event} [{guard}]")
+                        else:
+                            out.append(f"{indent}{state_name} --> {target_state} : {event}")
+            
+            if "states" in state_config:
+                out.extend(_render_transitions(state_config["states"], indent))
+        return out
+
+    if machine.get("initial"):
+        lines.append(f'    [*] --> {machine["initial"]}')
+    lines.append("")
+    
+    lines.extend(_render_states(machine.get("states", {})))
+    lines.append("")
+    lines.extend(_render_transitions(machine.get("states", {})))
     
     # Final states
-    lines.extend(["    [*] <-- cancelled", "    [*] <-- success", "@enduml"])
+    lines.extend(["", "    [*] <-- cancelled", "    [*] <-- success", "@enduml"])
     return "\n".join(lines)
 
 
