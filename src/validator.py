@@ -223,7 +223,8 @@ def print_report(results: dict):
     if results["unreachable_states"]:
         print(f"\n⚠️  STATI NON RAGGIUNGIBILI ({len(results['unreachable_states'])}):")
         for issue in results["unreachable_states"]:
-            print(f"  - {issue['state']}: {issue['description']}")
+            state_name = issue.get('state', issue.get('issue', 'unknown'))
+            print(f"  - {state_name}: {issue['description']}")
     
     # Invalid transitions
     if results["invalid_transitions"]:

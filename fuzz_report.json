@@ -1,0 +1,73 @@
+{
+  "summary": {
+    "machine_file": "./output/spec/spec_machine.json",
+    "spec_file": "spec.md",
+    "elapsed_seconds": 0.0,
+    "total_errors": 1,
+    "total_warnings": 6,
+    "bugs_found": 0
+  },
+  "validation_errors": [
+    {
+      "type": "INVALID_INITIAL",
+      "severity": "error",
+      "message": "Initial state 'app_idle' does not exist",
+      "state": "app_idle"
+    }
+  ],
+  "validation_warnings": [
+    {
+      "type": "POTENTIALLY_UNREACHABLE",
+      "severity": "warning",
+      "message": "State 'api_fetching_prices' is never targeted by any transition",
+      "state": "api_fetching_prices"
+    },
+    {
+      "type": "POTENTIALLY_UNREACHABLE",
+      "severity": "warning",
+      "message": "State 'api_fetching_clusters' is never targeted by any transition",
+      "state": "api_fetching_clusters"
+    },
+    {
+      "type": "POTENTIALLY_UNREACHABLE",
+      "severity": "warning",
+      "message": "State 'api_joining_group' is never targeted by any transition",
+      "state": "api_joining_group"
+    },
+    {
+      "type": "UNUSED_CONTEXT",
+      "severity": "info",
+      "message": "Context variable 'retryCount' may not be used",
+      "context_var": "retryCount"
+    },
+    {
+      "type": "UNUSED_CONTEXT",
+      "severity": "info",
+      "message": "Context variable 'errors' may not be used",
+      "context_var": "errors"
+    },
+    {
+      "type": "UNUSED_CONTEXT",
+      "severity": "info",
+      "message": "Context variable 'user' may not be used",
+      "context_var": "user"
+    }
+  ],
+  "fuzzing_bugs": [],
+  "coverage": {
+    "states_total": 12,
+    "states_visited": 12,
+    "transitions_total": 21,
+    "transitions_covered": 21,
+    "state_coverage_percent": 100,
+    "transition_coverage_percent": 100
+  },
+  "metrics": {
+    "states_count": 12,
+    "transitions_count": 21,
+    "iterations": 1000,
+    "max_steps": 50,
+    "paths_executed": 1000,
+    "steps_executed": 1000
+  }
+}

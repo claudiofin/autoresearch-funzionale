@@ -330,6 +330,16 @@ def run_analysis(context_file: str, output_file: str, time_budget: int) -> dict:
         if from_state in machine["states"]:
             machine["states"][from_state]["on"][event] = to_state
     
+    # Fix: if LLM used 'idle' instead of 'app_idle', normalize
+    if "idle" in machine["states"] and machine["initial"] == "app_idle":
+        # Rename 'idle' to 'app_idle'
+        machine["states"]["app_idle"] = machine["states"].pop("idle")
+        # Update all transitions pointing to 'idle'
+        for state_config in machine["states"].values():
+            for event, target in list(state_config.get("on", {}).items()):
+                if target == "idle":
+                    state_config["on"][event] = "app_idle"
+    
     print(f"Generated state machine: {len(machine['states'])} states")
     
     # Build sections
