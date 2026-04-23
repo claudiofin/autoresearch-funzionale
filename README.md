@@ -122,6 +122,61 @@ export LLM_MODEL="your-model"
 
 ## Output
 
+### UI Specifications (output/ui_specs/)
+
+Dopo aver generato la macchina a stati, puoi usare `ui_generator.py` per creare **Blueprint Markdown** pronti per essere usati con AI UI generators:
+
+```bash
+# Genera tutte le UI specs (stati + schermate + README)
+python3 src/ui_generator.py
+
+# Con provider specifico
+python3 src/ui_generator.py --provider ollama --model llama3
+
+# Solo stati o solo schermate
+python3 src/ui_generator.py --states-only
+python3 src/ui_generator.py --screens-only
+```
+
+#### Cosa genera
+
+```
+output/ui_specs/
+├── README.md              ← Indice con diagramma PlantUML
+├── screens/               ← Schermate reali (pronte per v0/Claude)
+│   ├── 01_login.md
+│   ├── 02_dashboard.md
+│   ├── 03_catalogo.md
+│   └── ...
+└── states/                ← Stati macchina (riferimento)
+    ├── UI_app_idle.md
+    ├── UI_successo.md
+    └── ...
+```
+
+#### Come usarli con AI UI Generators
+
+1. **Apri** un file schermata (es. `output/ui_specs/screens/02_dashboard.md`)
+2. **Copia** tutto il contenuto
+3. **Incolla** nel tuo AI UI generator preferito:
+
+| Tool | URL | Cosa fa |
+|------|-----|---------|
+| **v0.dev** | https://v0.dev | Genera UI React/Tailwind |
+| **Claude Artifacts** | https://claude.ai | Genera componenti con logica |
+| **Bolt.new** | https://bolt.new | Genera app complete |
+| **Lovable** | https://lovable.dev | Genera UI moderne |
+| **Google Stitch** | https://stitch.google | Genera UI da prompt |
+| **Figma AI** | https://figma.com | Genera design |
+
+Ogni file Markdown contiene:
+- Descrizione della schermata
+- Dati necessari con mock data
+- Componenti UI dettagliati
+- Mapping XState (ogni bottone → evento)
+- Stati UI (loading, errore, vuoto)
+- Note per generatori AI (Tailwind, Shadcn)
+
 ### Specifica Funzionale (spec.md)
 
 La specifica generata include:
