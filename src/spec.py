@@ -294,7 +294,7 @@ Project context:
 Respond ONLY with valid JSON:
 
 {{
-  "states": [{{"name": "snake_case", "description": "...", "entry_actions": [], "exit_actions": []}}],
+  "states": [{{"name": "snake_case", "description": "...", "entry_actions": [], "exit_actions": [], "sub_states": [], "initial_sub_state": null}}],
   "transitions": [{{"from_state": "...", "to_state": "...", "event": "UPPER_CASE", "guard": null}}],
   "edge_cases": [{{"id": "EC001", "scenario": "...", "trigger": "...", "expected_behavior": "...", "priority": "high"}}],
   "flows": [{{"name": "...", "steps": [{{"trigger": "...", "action": "...", "expected_outcome": "...", "error_scenario": "..."}}]}}],
@@ -439,6 +439,65 @@ def run_analysis(context_file: str, output_file: str, time_budget: int,
         print("   The system cannot work without an LLM.")
         sys.exit(1)
     
+    # ----- Helper: build a state config (flat or hierarchical) -----
+    def _build_state_config(state: dict) -> dict:
+        """Build XState state config from LLM state dict.
+        
+        Supports hierarchical states: if 'sub_states' is present and non-empty,
+        creates nested states with an 'initial' sub-state and navigation events.
+        """
+        config = {
+            "entry": state.get("entry_actions", []),
+            "exit": state.get("exit_actions", []),
+            "on": {}
+        }
+        
+        sub_states = state.get("sub_states", [])
+        if sub_states:
+            initial_sub = state.get("initial_sub_state") or sub_states[0]
+            config["initial"] = initial_sub
+            config["states"] = {}
+            for sub in sub_states:
+                sub_name = sub if isinstance(sub, str) else sub.get("name", "")
+                sub_entry = [] if isinstance(sub, str) else sub.get("entry_actions", [])
+                sub_exit = [] if isinstance(sub, str) else sub.get("exit_actions", [])
+                config["states"][sub_name] = {
+                    "entry": sub_entry,
+                    "exit": sub_exit,
+                    "on": {}
+                }
+            # Auto-generate NAVIGATE events between sub-states
+            for sub in sub_states:
+                sub_name = sub if isinstance(sub, str) else sub.get("name", "")
+                nav_event = f"NAVIGATE_{sub_name.upper()}"
+                for other_sub in sub_states:
+                    other_name = other_sub if isinstance(other_sub, str) else other_sub.get("name", "")
+                    if other_name != sub_name:
+                        config["states"][other_name]["on"][nav_event] = f".{sub_name}"
+        
+        return config
+    
+    # ----- Helper: add transitions to machine -----
+    def _add_transitions(machine: dict, transitions: list):
+        """Add transitions with support for guards and actions."""
+        for trans in transitions:
+            from_state = trans["from_state"]
+            to_state = trans["to_state"]
+            event = trans["event"]
+            guard = trans.get("guard") or trans.get("cond")
+            actions = trans.get("actions", [])
+            
+            if from_state in machine["states"]:
+                if guard or actions:
+                    transition = {"target": to_state}
+                    if guard:
+                        transition["cond"] = guard
+                    if actions:
+                        transition["actions"] = actions
+                    machine["states"][from_state]["on"][event] = transition
+                else:
+                    machine["states"][from_state]["on"][event] = to_state
+    
     # Merge with existing machine (if any)
     if existing_machine:
         # Start from existing machine
@@ -449,13 +508,9 @@ def run_analysis(context_file: str, output_file: str, time_budget: int,
         for state in llm_data.get("states", []):
             state_name = state["name"]
             if state_name not in machine["states"]:
-                machine["states"][state_name] = {
-                    "entry": state.get("entry_actions", []),
-                    "exit": state.get("exit_actions", []),
-                    "on": {}
-                }
+                machine["states"][state_name] = _build_state_config(state)
             else:
-                # Update existing state with new entry/exit actions
+                # Update existing state
                 existing_entry = machine["states"][state_name].get("entry", [])
                 new_entry = state.get("entry_actions", [])
                 machine["states"][state_name]["entry"] = list(set(existing_entry + new_entry))
@@ -463,57 +518,29 @@ def run_analysis(context_file: str, output_file: str, time_budget: int,
                 existing_exit = machine["states"][state_name].get("exit", [])
                 new_exit = state.get("exit_actions", [])
                 machine["states"][state_name]["exit"] = list(set(existing_exit + new_exit))
+                
+                # Preserve or add hierarchical sub-states
+                sub_states = state.get("sub_states", [])
+                if sub_states:
+                    new_config = _build_state_config(state)
+                    machine["states"][state_name]["initial"] = new_config["initial"]
+                    # Merge sub-states: keep existing, add new
+                    existing_subs = machine["states"][state_name].get("states", {})
+                    existing_subs.update(new_config.get("states", {}))
+                    machine["states"][state_name]["states"] = existing_subs
         
-        # Add new transitions (support guards and actions)
-        for trans in llm_data.get("transitions", []):
-            from_state = trans["from_state"]
-            to_state = trans["to_state"]
-            event = trans["event"]
-            guard = trans.get("guard") or trans.get("cond")
-            actions = trans.get("actions", [])
-            
-            if from_state in machine["states"]:
-                # Build transition object
-                if guard or actions:
-                    transition = {"target": to_state}
-                    if guard:
-                        transition["cond"] = guard
-                    if actions:
-                        transition["actions"] = actions
-                    machine["states"][from_state]["on"][event] = transition
-                else:
-                    machine["states"][from_state]["on"][event] = to_state
+        # Add transitions
+        _add_transitions(machine, llm_data.get("transitions", []))
     else:
         # Generate from scratch
         machine = generate_base_machine()
         
         for state in llm_data.get("states", []):
             state_name = state["name"]
-            machine["states"][state_name] = {
-                "entry": state.get("entry_actions", []),
-                "exit": state.get("exit_actions", []),
-                "on": {}
-            }
+            machine["states"][state_name] = _build_state_config(state)
         
-        # Add transitions (support guards and actions)
-        for trans in llm_data.get("transitions", []):
-            from_state = trans["from_state"]
-            to_state = trans["to_state"]
-            event = trans["event"]
-            guard = trans.get("guard") or trans.get("cond")
-            actions = trans.get("actions", [])
-            
-            if from_state in machine["states"]:
-                # Build transition object
-                if guard or actions:
-                    transition = {"target": to_state}
-                    if guard:
-                        transition["cond"] = guard
-                    if actions:
-                        transition["actions"] = actions
-                    machine["states"][from_state]["on"][event] = transition
-                else:
-                    machine["states"][from_state]["on"][event] = to_state
+        # Add transitions
+        _add_transitions(machine, llm_data.get("transitions", []))
     
     # Fix: if LLM used 'idle' instead of 'app_idle', normalize
     if "idle" in machine["states"] and machine["initial"] == "app_idle":

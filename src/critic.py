@@ -331,7 +331,7 @@ def print_critic_report(report: dict):
 
 def main():
     parser = argparse.ArgumentParser(description="Critic - Critical review of functional specification")
-    parser.add_argument("--fuzz-report", type=str, default="output/fuzz_report.json",
+    parser.add_argument("--fuzz-report", type=str, default="output/spec/fuzz_report.json",
                         help="Fuzz report JSON file")
     parser.add_argument("--spec", type=str, default="output/spec/spec.md",
                         help="Spec file for context")
@@ -339,8 +339,8 @@ def main():
                         help="State machine JSON file")
     parser.add_argument("--context", type=str, default=None,
                         help="Project context file (for missing flow detection)")
-    parser.add_argument("--output", type=str, default="output/critic_feedback.json",
-                        help="Output JSON file (default: output/critic_feedback.json)")
+    parser.add_argument("--output", type=str, default="output/spec/critic_report.json",
+                        help="Output JSON file (default: output/spec/critic_report.json)")
     parser.add_argument("--use-llm", action="store_true",
                         help="Force LLM usage even if static analysis is available")
     args = parser.parse_args()
