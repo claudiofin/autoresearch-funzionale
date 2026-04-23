@@ -41,7 +41,7 @@ def generate_base_machine() -> dict:
     """Genera una macchina a stati base vuota."""
     return {
         "id": "appFlow",
-        "initial": "idle",
+        "initial": "app_idle",
         "context": {"user": None, "errors": [], "retryCount": 0},
         "states": {}
     }
@@ -52,18 +52,28 @@ def generate_base_machine() -> dict:
 # ---------------------------------------------------------------------------
 
 def generate_plantuml_statechart(machine: dict) -> str:
-    """Convert XState machine to PlantUML state diagram."""
-    lines = ["@startuml", "", f'state "{machine["id"]}" {{', "",
-             f'    [*] --> {machine["initial"]}', ""]
+    """Convert XState machine to PlantUML state diagram (flat layout)."""
+    lines = ["@startuml", ""]
+    
+    # Initial transition
+    lines.append(f'    [*] --> {machine["initial"]}')
+    lines.append("")
     
     for state_name, state_config in machine["states"].items():
         entry_actions = state_config.get("entry", [])
-        if entry_actions:
+        exit_actions = state_config.get("exit", [])
+        
+        # State with notes
+        if entry_actions or exit_actions:
             lines.append(f'    state "{state_name}" {{')
-            lines.append(f'        note: Entry: {", ".join(entry_actions)}')
+            if entry_actions:
+                lines.append(f'        note: Entry: {", ".join(entry_actions)}')
+            if exit_actions:
+                lines.append(f'        note: Exit: {", ".join(exit_actions)}')
         else:
             lines.append(f'    state "{state_name}"')
         
+        # Transitions
         transitions = state_config.get("on", {})
         if transitions:
             for event, target in transitions.items():
@@ -76,34 +86,84 @@ def generate_plantuml_statechart(machine: dict) -> str:
                         lines.append(f"        {state_name} --> {target_state} : {event}")
                 else:
                     lines.append(f"        {state_name} --> {target} : {event}")
+        
         lines.append("")
     
-    lines.extend(["    [*] <-- cancelled", "    [*] <-- success", "", "}", "@enduml"])
+    # Final states
+    lines.extend(["    [*] <-- cancelled", "    [*] <-- success", "@enduml"])
     return "\n".join(lines)
 
 
-def generate_plantuml_sequence() -> str:
-    """Generate a generic PlantUML sequence diagram."""
-    lines = [
-        "@startuml", "",
-        "participant User", "participant Interface", "participant Backend", "participant Database", "",
-        "User -> Interface: START",
-        "Interface -> Interface: showLoadingIndicator()",
-        "Interface -> Backend: Request", "",
-        "alt Success",
-        "    Backend --> Interface: 200 OK",
-        "    Interface -> Interface: showSuccessMessage()",
-        "    Interface --> User: Display Result",
-        "else Error",
-        "    Backend --> Interface: 4xx/5xx Error",
-        "    Interface -> Interface: showErrorMessage()",
-        "    Interface --> User: Display Error",
-        "else Timeout",
-        "    Interface -> Interface: showTimeoutMessage()",
-        "    Interface --> User: Display Timeout",
-        "end", "", "@enduml"
-    ]
-    return "\n".join(lines)
+def generate_plantuml_sequence(flows: list) -> str:
+    """Generate PlantUML sequence diagrams from actual flows."""
+    if not flows:
+        # Fallback generico solo se non ci sono flussi
+        lines = [
+            "@startuml", "",
+            "participant User", "participant Interface", "participant Backend", "participant Database", "",
+            "User -> Interface: START",
+            "Interface -> Interface: showLoadingIndicator()",
+            "Interface -> Backend: Request", "",
+            "alt Success",
+            "    Backend --> Interface: 200 OK",
+            "    Interface -> Interface: showSuccessMessage()",
+            "    Interface --> User: Display Result",
+            "else Error",
+            "    Backend --> Interface: 4xx/5xx Error",
+            "    Interface -> Interface: showErrorMessage()",
+            "    Interface --> User: Display Error",
+            "else Timeout",
+            "    Interface -> Interface: showTimeoutMessage()",
+            "    Interface --> User: Display Timeout",
+            "end", "", "@enduml"
+        ]
+        return "\n".join(lines)
+    
+    # Genera un diagramma per ogni flusso
+    all_diagrams = []
+    for flow in flows:
+        lines = ["@startuml", "", f"== {flow['name'].replace('_', ' ').title()} ==", ""]
+        lines.extend([
+            "participant User", "participant Interface", "participant Backend", "participant Database", ""
+        ])
+        
+        steps = flow.get("steps", [])
+        for i, step in enumerate(steps):
+            trigger = step.get("trigger", "")
+            action = step.get("action", "")
+            outcome = step.get("expected_outcome", "")
+            error = step.get("error_scenario", "")
+            
+            if i == 0:
+                lines.append(f"User -> Interface: {trigger}")
+            else:
+                lines.append(f"User -> Interface: {trigger}")
+            
+            # Parse action per determinare la chiamata
+            if "POST" in action or "GET" in action or "PUT" in action or "DELETE" in action:
+                lines.append(f"Interface -> Backend: {action}")
+                lines.append(f"Backend -> Database: query")
+                lines.append(f"Database --> Backend: result")
+            
+            if error:
+                lines.append(f"")
+                lines.append(f"alt Success")
+                lines.append(f"    Backend --> Interface: {outcome}")
+                lines.append(f"    Interface --> User: Display Result")
+                lines.append(f"else Error")
+                lines.append(f"    Backend --> Interface: {error}")
+                lines.append(f"    Interface --> User: Show Error")
+                lines.append(f"end")
+            else:
+                lines.append(f"    Backend --> Interface: {outcome}")
+                lines.append(f"    Interface --> User: Display Result")
+            
+            lines.append("")
+        
+        lines.append("@enduml")
+        all_diagrams.append("\n".join(lines))
+    
+    return "\n\n".join(all_diagrams)
 
 
 # ---------------------------------------------------------------------------
@@ -272,10 +332,6 @@ def run_analysis(context_file: str, output_file: str, time_budget: int) -> dict:
     
     print(f"Generated state machine: {len(machine['states'])} states")
     
-    # Generate diagrams
-    statechart = generate_plantuml_statechart(machine)
-    sequence = generate_plantuml_sequence()
-    
     # Build sections
     edge_cases = llm_data.get("edge_cases", [])
     edge_cases_md = "| ID | Scenario | Expected | Priority |\n|----|----------|----------|----------|\n"
@@ -283,6 +339,10 @@ def run_analysis(context_file: str, output_file: str, time_budget: int) -> dict:
         edge_cases_md += f"| {ec['id']} | {ec['scenario']} | {ec['expected_behavior']} | {ec['priority']} |\n"
     
     flows = llm_data.get("flows", [])
+    
+    # Generate diagrams (after flows is defined)
+    statechart = generate_plantuml_statechart(machine)
+    sequence = generate_plantuml_sequence(flows)
     flows_md = ""
     for flow in flows:
         flows_md += f"\n### {flow['name']}\n"
@@ -453,7 +513,7 @@ Il contesto originale del progetto è in `project_context.md`.
 
 def main():
     parser = argparse.ArgumentParser(description="Generate functional specification from context")
-    parser.add_argument("--context", type=str, default="project_context.md",
+    parser.add_argument("--context", type=str, default="output/context/project_context.md",
                         help="Input context file")
     parser.add_argument("--output", type=str, default="output/spec/spec.md",
                         help="Output spec file")
