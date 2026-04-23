@@ -56,6 +56,12 @@ def main():
     analyst_parser = subparsers.add_parser("analyst", help="Analizza pattern UI")
     analyst_parser.add_argument("--context", type=str, default="output/project_context.md")
     
+    # validator command
+    validator_parser = subparsers.add_parser("validator", help="Valida macchina a stati XState")
+    validator_parser.add_argument("--machine", type=str, default="output/spec/spec_machine.json")
+    validator_parser.add_argument("--output", type=str, default=None,
+                                  help="Output JSON report file")
+    
     args = parser.parse_args()
     
     if not args.command:
@@ -113,6 +119,13 @@ def main():
         from analyst import main as analyst_main
         sys.argv = ["analyst", "--context", args.context]
         analyst_main()
+    
+    elif args.command == "validator":
+        from validator import main as validator_main
+        sys.argv = ["validator", "--machine", args.machine]
+        if args.output:
+            sys.argv.extend(["--output", args.output])
+        validator_main()
 
 
 if __name__ == "__main__":

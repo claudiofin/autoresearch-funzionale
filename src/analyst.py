@@ -102,13 +102,23 @@ Rispondi SOLO con JSON valido (nessun markdown, nessun codice extra):
   "confidence": 0.8
 }}
 
-Regole:
+Regole CRITICHE:
 1. JSON valido al 100% - nessun testo fuori dal JSON
 2. Nomi stati in snake_case minuscolo
 3. Eventi in MAIUSCOLO_CON_UNDERSCORE
 4. Includi almeno: stati di loading, errore, successo, vuoto
 5. Includi transizioni per: navigazione avanti/indietro, errore, annullamento
 6. Edge case: timeout, errore rete, sessione scaduta, input invalido
+
+REGOLA FONDAMENTALE - NO DEAD-END STATES:
+Ogni stato DEVE avere almeno una transizione in uscita (tranne lo stato finale di successo).
+- Stato di ERRORE: deve avere transizione RIPROVA → stato di loading, e ANNULLA → stato iniziale
+- Stato di LOADING: deve avere transizione ANNULLA → stato precedente, TIMEOUT → stato errore
+- Stato VUOTO: deve avere transizione AGGIORNA → stato di loading, TORNA_INDIETRO → stato iniziale
+- Stato di SUCCESSO: può non avere transizioni (è uno stato finale)
+- Stato SESSIONE_SCADUTA: deve avere transizione RIAUTENTICAZIONE → stato di loading, ANNULLA → stato iniziale
+
+Verifica: per ogni stato che generi, chiediti "come fa l'utente a uscire da questo stato?" e aggiungi la transizione corrispondente.
 """
     
     print(f"  🤖 Chiamata LLM ({model}), contesto: {len(context_text)} chars...")

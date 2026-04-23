@@ -170,6 +170,19 @@ class AutonomousLoop:
         if spec_result.get("error"):
             result["errors"].append(f"Spec: {spec_result['error']}")
         
+        # Step 2.5: Validator (check machine state quality)
+        print("\n🔎 Step 2.5: State machine validation...")
+        validator_result = self._run_validator()
+        result["steps"]["validator"] = validator_result
+        if validator_result.get("error"):
+            result["errors"].append(f"Validator: {validator_result['error']}")
+        elif validator_result.get("quality_score") is not None:
+            score = validator_result["quality_score"]
+            dead_ends = validator_result.get("dead_end_count", 0)
+            print(f"  Quality Score: {score}/100, Dead-end states: {dead_ends}")
+            if dead_ends > 0:
+                result["warnings"] = result.get("warnings", []) + [f"{dead_ends} dead-end states found"]
+        
         # Step 3: Completeness check
         print("\n✅ Step 3: Completeness check...")
         completeness_result = self._run_completeness()
@@ -303,6 +316,53 @@ class AutonomousLoop:
             
         except subprocess.TimeoutExpired:
             return {"error": "Spec timeout"}
+        except Exception as e:
+            return {"error": str(e)}
+    
+    def _run_validator(self) -> dict:
+        """Esegue il validatore della macchina a stati."""
+        try:
+            env = os.environ.copy()
+            script = os.path.join(SCRIPT_DIR, "validator.py")
+            result = subprocess.run(
+                ["python3", script, "--machine", self.spec_machine],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env=env
+            )
+            
+            if result.stdout:
+                for line in result.stdout.strip().split("\n"):
+                    if line.strip():
+                        print(f"  {line}")
+            
+            # Parse output per estrarre metriche
+            output_text = result.stdout or ""
+            quality_score = None
+            dead_end_count = 0
+            
+            for line in output_text.split("\n"):
+                if "Quality Score:" in line:
+                    try:
+                        quality_score = int(line.split(":")[1].strip().split("/")[0])
+                    except:
+                        pass
+                if "DEAD-END STATES" in line:
+                    try:
+                        dead_end_count = int(line.split("(")[1].split(")")[0])
+                    except:
+                        pass
+            
+            return {
+                "success": True,
+                "quality_score": quality_score,
+                "dead_end_count": dead_end_count,
+                "exit_code": result.returncode
+            }
+            
+        except subprocess.TimeoutExpired:
+            return {"error": "Validator timeout"}
         except Exception as e:
             return {"error": str(e)}
     
