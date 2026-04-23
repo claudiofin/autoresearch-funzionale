@@ -2,8 +2,12 @@
 Spec generator per analisi funzionale automatica.
 Legge project_context.md e genera spec.md con diagrammi PlantUML e macchina a stati XState.
 
-TUTTO è generato dall'LLM. Nessun fallback hardcoded.
-Le regole dicono COSA deve esserci, l'LLM decide COME si chiama.
+APPROCCIO ITERATIVO:
+- Iterazione 1: genera da zero
+- Iterazioni successive: modifica la macchina esistente basandosi su:
+  - Suggerimenti dell'analista (stati/transizioni mancanti)
+  - Feedback del critic (critical issues da correggere)
+  - Validator errors (dead-end states, unreachable states)
 
 Usage:
     python run.py spec --context output/project_context.md
@@ -97,7 +101,6 @@ def generate_plantuml_statechart(machine: dict) -> str:
 def generate_plantuml_sequence(flows: list) -> str:
     """Generate PlantUML sequence diagrams from actual flows."""
     if not flows:
-        # Fallback generico solo se non ci sono flussi
         lines = [
             "@startuml", "",
             "participant User", "participant Interface", "participant Backend", "participant Database", "",
@@ -119,7 +122,6 @@ def generate_plantuml_sequence(flows: list) -> str:
         ]
         return "\n".join(lines)
     
-    # Genera un diagramma per ogni flusso
     all_diagrams = []
     for flow in flows:
         lines = ["@startuml", "", f"== {flow['name'].replace('_', ' ').title()} ==", ""]
@@ -139,7 +141,6 @@ def generate_plantuml_sequence(flows: list) -> str:
             else:
                 lines.append(f"User -> Interface: {trigger}")
             
-            # Parse action per determinare la chiamata
             if "POST" in action or "GET" in action or "PUT" in action or "DELETE" in action:
                 lines.append(f"Interface -> Backend: {action}")
                 lines.append(f"Backend -> Database: query")
@@ -167,11 +168,20 @@ def generate_plantuml_sequence(flows: list) -> str:
 
 
 # ---------------------------------------------------------------------------
-# LLM Client
+# LLM Client - APPROCCIO ITERATIVO
 # ---------------------------------------------------------------------------
 
-def call_llm_spec(context_text: str, max_retries: int = 3) -> dict:
-    """Chiama l'LLM per generare la specifica funzionale."""
+def call_llm_spec(context_text: str, analyst_suggestions: dict = None, 
+                  existing_machine: dict = None, critic_feedback: dict = None,
+                  max_retries: int = 3) -> dict:
+    """Chiama l'LLM per generare/modificare la specifica funzionale.
+    
+    APPROCCIO ITERATIVO:
+    - Se esiste una macchina esistente, la passiamo all'LLM
+    - L'LLM deve MODIFICARE la macchina, non rigenerarla
+    - I suggerimenti dell'analista indicano cosa aggiungere
+    - Il feedback del critic indica cosa correggere
+    """
     api_key = os.getenv("LLM_API_KEY", "")
     if not api_key:
         print("❌ ERRORE: LLM_API_KEY non è settato.")
@@ -197,18 +207,89 @@ def call_llm_spec(context_text: str, max_retries: int = 3) -> dict:
         sys.exit(1)
     
     # Tronca contesto
-    max_context = 6000
+    max_context = 4000
     if len(context_text) > max_context:
         lines = context_text.split("\n")
         important = [l for l in lines if l.startswith("##") or l.startswith("###") or l.startswith("-") or l.startswith("|")]
-        context_text = "\n".join(important[:150])
+        context_text = "\n".join(important[:100])
         if len(context_text) > max_context:
             context_text = context_text[:max_context]
     
-    prompt = f"""Analizza e genera JSON con states, transitions, edge_cases.
+    # Costruisci sezione macchina esistente (se c'è)
+    existing_section = ""
+    if existing_machine:
+        existing_states = list(existing_machine.get("states", {}).keys())
+        existing_transitions = []
+        for state_name, state_config in existing_machine.get("states", {}).items():
+            for event, target in state_config.get("on", {}).items():
+                existing_transitions.append(f"    {state_name} --{event}--> {target}")
+        
+        existing_section = f"""
 
-Contesto:
+MACCHINA A STATI ESISTENTE (NON RIMUOVERE STATI, SOLO AGGIUNGERE/CORREGGERE):
+Stati attuali ({len(existing_states)}): {', '.join(existing_states[:20])}
+Transizioni attuali ({len(existing_transitions)}):
+{chr(10).join(existing_transitions[:30])}
+
+ISTRUZIONI:
+- MANTIENI tutti gli stati esistenti
+- AGGIUNGI i nuovi stati dai suggerimenti dell'analista
+- CORREGGI le transizioni per risolvere i dead-end states
+- NON RIMUOVERE mai uno stato esistente
+"""
+    
+    # Costruisci sezione suggerimenti analista
+    suggestions_section = ""
+    if analyst_suggestions:
+        states = analyst_suggestions.get("states", [])
+        transitions = analyst_suggestions.get("transitions", [])
+        edge_cases = analyst_suggestions.get("edge_cases", [])
+        events = analyst_suggestions.get("events", [])
+        suggestions_section = f"""
+
+SUGGERIMENTI DELL'ANALISTA (DEVI INCLUDERE QUESTI):
+- {len(states)} stati suggeriti: {', '.join(s['name'] for s in states[:15])}
+- {len(transitions)} transizioni suggerite
+- {len(edge_cases)} edge case da gestire
+- {len(events)} eventi da supportare: {', '.join(e['name'] for e in events[:10])}
+
+AZIONI RICHIESTE:
+1. Aggiungi TUTTI gli stati suggeriti che non esistono già
+2. Aggiungi le transizioni suggerite
+3. Gestisci gli edge case con stati di errore appropriati
+"""
+    
+    # Costruisci sezione critic feedback
+    critic_section = ""
+    if critic_feedback:
+        critical = critic_feedback.get("summary", {}).get("critical_issues", [])
+        if critical:
+            critic_section = f"""
+
+CRITICAL ISSUES DA CORREGGERE (PRIORITÀ ALTA):
+{chr(10).join(f'- {c}' for c in critical[:10])}
+
+AZIONI RICHIESTE:
+- Correggi OGNI critical issue sopra
+- Aggiungi transizioni di uscita per dead-end states
+- Connetti stati non raggiungibili allo stato iniziale
+"""
+    
+    # Determina se è iterativo o da zero
+    is_iterative = existing_machine is not None and len(existing_machine.get("states", {})) > 0
+    
+    if is_iterative:
+        task = "MODIFICA la macchina a stati esistente. NON rigenerare da zero."
+    else:
+        task = "Genera una nuova macchina a stati dal contesto."
+    
+    prompt = f"""{task}
+
+Contesto del progetto:
 {context_text}
+{existing_section}
+{suggestions_section}
+{critic_section}
 
 Rispondi SOLO con JSON valido:
 
@@ -225,9 +306,14 @@ Regole:
 2. snake_case stati, UPPER_CASE eventi
 3. Ogni stato API ha ERROR, TIMEOUT, CANCEL
 4. Copri: auth, core flow, error handling, empty states
+5. Stato iniziale: app_idle (DEVE esistere)
+6. Ogni stato deve avere almeno una transizione in uscita (no dead-end)
+7. Tutti gli stati devono essere raggiungibili da app_idle
 """
     
     print(f"  🤖 Chiamata LLM per spec ({model}), contesto: {len(context_text)} chars...")
+    if existing_machine:
+        print(f"  📦 Macchina esistente: {len(existing_machine.get('states', {}))} stati")
     
     for attempt in range(max_retries):
         try:
@@ -236,11 +322,11 @@ Regole:
                 timeout=180,
                 model=model,
                 messages=[
-                    {"role": "system", "content": "Sei un Product Manager. Rispondi SOLO con JSON valido. Inizia con { e termina con }. Nessun markdown, nessun testo extra."},
+                    {"role": "system", "content": "Sei un Product Manager esperto di macchine a stati. Rispondi SOLO con JSON valido. Inizia con { e termina con }. Nessun markdown, nessun testo extra."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.3,
-                max_tokens=4096,
+                max_tokens=8192,  # Aumentato per gestire macchine più grandi
             )
             
             content = response.choices[0].message.content.strip()
@@ -285,11 +371,20 @@ Regole:
 
 
 # ---------------------------------------------------------------------------
-# Main Analysis Function
+# Main Analysis Function - APPROCCIO ITERATIVO
 # ---------------------------------------------------------------------------
 
-def run_analysis(context_file: str, output_file: str, time_budget: int) -> dict:
-    """Run the functional analysis and generate spec.md."""
+def run_analysis(context_file: str, output_file: str, time_budget: int, 
+                 analyst_suggestions: dict = None, 
+                 existing_machine_file: str = None,
+                 critic_feedback: dict = None) -> dict:
+    """Run the functional analysis and generate spec.md.
+    
+    APPROCCIO ITERATIVO:
+    1. Carica la macchina esistente (se esiste)
+    2. Passala all'LLM con suggerimenti e critic feedback
+    3. L'LLM modifica la macchina invece di rigenerarla
+    """
     
     start_time = time.time()
     
@@ -300,45 +395,97 @@ def run_analysis(context_file: str, output_file: str, time_budget: int) -> dict:
     with open(context_file, "r", encoding="utf-8") as f:
         context_text = f.read()
     
+    # Carica la macchina esistente (se c'è)
+    existing_machine = None
+    if existing_machine_file and os.path.exists(existing_machine_file):
+        with open(existing_machine_file, "r", encoding="utf-8") as f:
+            existing_machine = json.load(f)
+        print(f"  📦 Macchina esistente caricata: {len(existing_machine.get('states', {}))} stati")
+    
     print(f"Context loaded: {len(context_text)} characters")
+    if analyst_suggestions:
+        print(f"  📋 Analyst suggestions: {len(analyst_suggestions.get('states', []))} states, {len(analyst_suggestions.get('transitions', []))} transitions")
+    if critic_feedback:
+        critical = critic_feedback.get("summary", {}).get("critical_issues", [])
+        print(f"  🚨 Critic feedback: {len(critical)} critical issues")
     print("  🚀 Generazione con LLM...")
     
-    # Call LLM
+    # Call LLM (approccio iterativo)
     try:
-        llm_data = call_llm_spec(context_text)
+        llm_data = call_llm_spec(
+            context_text, 
+            analyst_suggestions=analyst_suggestions,
+            existing_machine=existing_machine,
+            critic_feedback=critic_feedback
+        )
         print(f"  ✅ LLM: {len(llm_data.get('states', []))} states, {len(llm_data.get('transitions', []))} transitions")
     except Exception as e:
         print(f"❌ ERRORE: LLM fallito: {e}")
         print("   Il sistema non può funzionare senza LLM.")
         sys.exit(1)
     
-    # Generate state machine
-    machine = generate_base_machine()
-    
-    for state in llm_data.get("states", []):
-        state_name = state["name"]
-        machine["states"][state_name] = {
-            "entry": state.get("entry_actions", []),
-            "exit": state.get("exit_actions", []),
-            "on": {}
-        }
-    
-    for trans in llm_data.get("transitions", []):
-        from_state = trans["from_state"]
-        to_state = trans["to_state"]
-        event = trans["event"]
-        if from_state in machine["states"]:
-            machine["states"][from_state]["on"][event] = to_state
+    # Merge con la macchina esistente (se c'è)
+    if existing_machine:
+        # Inizia dalla macchina esistente
+        machine = existing_machine.copy()
+        machine["states"] = dict(existing_machine.get("states", {}))
+        
+        # Aggiungi nuovi stati dai suggerimenti LLM
+        for state in llm_data.get("states", []):
+            state_name = state["name"]
+            if state_name not in machine["states"]:
+                machine["states"][state_name] = {
+                    "entry": state.get("entry_actions", []),
+                    "exit": state.get("exit_actions", []),
+                    "on": {}
+                }
+            else:
+                # Aggiorna stato esistente con nuove entry/exit actions
+                existing_entry = machine["states"][state_name].get("entry", [])
+                new_entry = state.get("entry_actions", [])
+                machine["states"][state_name]["entry"] = list(set(existing_entry + new_entry))
+                
+                existing_exit = machine["states"][state_name].get("exit", [])
+                new_exit = state.get("exit_actions", [])
+                machine["states"][state_name]["exit"] = list(set(existing_exit + new_exit))
+        
+        # Aggiungi nuove transizioni
+        for trans in llm_data.get("transitions", []):
+            from_state = trans["from_state"]
+            to_state = trans["to_state"]
+            event = trans["event"]
+            if from_state in machine["states"]:
+                machine["states"][from_state]["on"][event] = to_state
+    else:
+        # Genera da zero
+        machine = generate_base_machine()
+        
+        for state in llm_data.get("states", []):
+            state_name = state["name"]
+            machine["states"][state_name] = {
+                "entry": state.get("entry_actions", []),
+                "exit": state.get("exit_actions", []),
+                "on": {}
+            }
+        
+        for trans in llm_data.get("transitions", []):
+            from_state = trans["from_state"]
+            to_state = trans["to_state"]
+            event = trans["event"]
+            if from_state in machine["states"]:
+                machine["states"][from_state]["on"][event] = to_state
     
     # Fix: if LLM used 'idle' instead of 'app_idle', normalize
     if "idle" in machine["states"] and machine["initial"] == "app_idle":
-        # Rename 'idle' to 'app_idle'
         machine["states"]["app_idle"] = machine["states"].pop("idle")
-        # Update all transitions pointing to 'idle'
         for state_config in machine["states"].values():
             for event, target in list(state_config.get("on", {}).items()):
                 if target == "idle":
                     state_config["on"][event] = "app_idle"
+    
+    # Fix: ensure app_idle exists
+    if "app_idle" not in machine["states"]:
+        machine["states"]["app_idle"] = {"entry": [], "exit": [], "on": {}}
     
     print(f"Generated state machine: {len(machine['states'])} states")
     
@@ -350,7 +497,7 @@ def run_analysis(context_file: str, output_file: str, time_budget: int) -> dict:
     
     flows = llm_data.get("flows", [])
     
-    # Generate diagrams (after flows is defined)
+    # Generate diagrams
     statechart = generate_plantuml_statechart(machine)
     sequence = generate_plantuml_sequence(flows)
     flows_md = ""
@@ -529,6 +676,12 @@ def main():
                         help="Output spec file")
     parser.add_argument("--time-budget", type=int, default=TIME_BUDGET,
                         help="Time budget in seconds")
+    parser.add_argument("--suggestions", type=str, default=None,
+                        help="Analyst suggestions JSON file")
+    parser.add_argument("--machine", type=str, default=None,
+                        help="Existing machine JSON file (for iterative approach)")
+    parser.add_argument("--critic-feedback", type=str, default=None,
+                        help="Critic feedback JSON file")
     args = parser.parse_args()
     
     if not os.path.exists(args.context):
@@ -536,13 +689,34 @@ def main():
         print("Run 'python ingest.py' first")
         sys.exit(1)
     
+    # Load analyst suggestions if provided
+    analyst_suggestions = None
+    if args.suggestions and os.path.exists(args.suggestions):
+        with open(args.suggestions, "r", encoding="utf-8") as f:
+            analyst_suggestions = json.load(f)
+        print(f"  📋 Analyst suggestions loaded: {args.suggestions}")
+    
+    # Load critic feedback if provided
+    critic_feedback = None
+    if args.critic_feedback and os.path.exists(args.critic_feedback):
+        with open(args.critic_feedback, "r", encoding="utf-8") as f:
+            critic_feedback = json.load(f)
+        print(f"  🚨 Critic feedback loaded: {args.critic_feedback}")
+    
     print(f"Running functional analysis...")
     print(f"  Context: {args.context}")
     print(f"  Output: {args.output}")
     print(f"  Time budget: {args.time_budget}s")
     print()
     
-    metrics = run_analysis(args.context, args.output, args.time_budget)
+    metrics = run_analysis(
+        args.context, 
+        args.output, 
+        args.time_budget, 
+        analyst_suggestions=analyst_suggestions,
+        existing_machine_file=args.machine,
+        critic_feedback=critic_feedback
+    )
     
     print()
     print("=" * 50)

@@ -176,7 +176,18 @@ def validate_machine(machine_file: str) -> dict:
         "unreachable_states": find_unreachable_states(machine),
         "invalid_transitions": find_invalid_transitions(machine),
         "potential_loops": find_potential_infinite_loops(machine),
+        # Conteggi per loop.py
+        "dead_end_count": 0,
+        "unreachable_count": 0,
+        "invalid_transition_count": 0,
+        "cycle_count": 0,
     }
+    
+    # Calcola contaggi
+    results["dead_end_count"] = len(results["dead_end_states"])
+    results["unreachable_count"] = len(results["unreachable_states"])
+    results["invalid_transition_count"] = len(results["invalid_transitions"])
+    results["cycle_count"] = len(results["potential_loops"])
     
     # Calcola score di qualità
     issues_count = (

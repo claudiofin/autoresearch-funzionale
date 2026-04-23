@@ -5,7 +5,9 @@ Coordina il flusso:
   Ingest → Analyst → Spec → Validator → Fuzzer → Critic → Analyst → ...
 
 Criteri di stop:
-  - 0 errori critici
+  - Quality Score 100/100 (macchina perfetta)
+  - Quality Score ≥ 90 E 0 critical issues (qualità sufficiente)
+  - Convergenza: Quality Score non migliora per 2 iterazioni consecutive
   - Max iterazioni raggiunte
   - Timeout raggiunto
 
@@ -54,13 +56,15 @@ class AutonomousLoop:
         time_budget: int = DEFAULT_TIME_BUDGET,
         checkpoint_dir: str = DEFAULT_CHECKPOINT_DIR,
         force_iterations: bool = FORCE_ALL_ITERATIONS,
-        input_dir: str = None
+        input_dir: str = None,
+        generate_ui: bool = False
     ):
         self.max_iterations = max_iterations
         self.time_budget = time_budget
         self.checkpoint_dir = checkpoint_dir
         self.force_iterations = force_iterations
         self.input_dir = input_dir  # Se fornito, esegue ingest all'inizio
+        self.generate_ui = generate_ui  # Se True, genera UI specs alla fine
         
         # Output files (organized in subfolders)
         if input_dir:
@@ -80,6 +84,7 @@ class AutonomousLoop:
         self.iteration = 0
         self.start_time = None
         self.history = []
+        self.quality_history = []  # Traccia Quality Score per convergenza
         
         # Create output directories
         os.makedirs(checkpoint_dir, exist_ok=True)
@@ -126,6 +131,14 @@ class AutonomousLoop:
                 print("🎉 Loop completato con successo!")
                 break
         
+        # Step finale: UI Generator (se richiesto)
+        if self.generate_ui:
+            print()
+            print("=" * 60)
+            print("🎨 GENERAZIONE UI SPECS")
+            print("=" * 60)
+            self._run_ui_generator()
+        
         # Report finale
         return self._generate_report()
     
@@ -143,7 +156,47 @@ class AutonomousLoop:
             print(f"\n⏹️  Raggiunto time budget ({elapsed:.0f}s > {self.time_budget}s)")
             return False
         
+        # Check quality-based stop criteria (skip if force_iterations)
+        if not self.force_iterations and len(self.quality_history) >= 1:
+            latest_quality = self.quality_history[-1]
+            
+            # Criterio 1: Quality Score 100/100 → STOP immediato
+            if latest_quality == 100:
+                print(f"\n🎉 Quality Score 100/100 raggiunto! Loop completato.")
+                return False
+            
+            # Criterio 2: Convergenza - stesso score per 2 iterazioni consecutive
+            if len(self.quality_history) >= 2:
+                prev_quality = self.quality_history[-2]
+                if latest_quality == prev_quality and latest_quality >= 80:
+                    print(f"\n🎯 Convergenza raggiunta: Quality Score {latest_quality}/100 stabile per 2 iterazioni.")
+                    return False
+        
         return True
+    
+    def _check_quality_stop(self, validator_result: dict, critic_result: dict) -> bool:
+        """Check se fermare il loop basandosi su Quality Score e critical issues.
+        
+        Restituisce True se il loop dovrebbe fermarsi.
+        """
+        if self.force_iterations:
+            return False
+        
+        quality_score = validator_result.get("quality_score")
+        critical_issues = critic_result.get("critical_issues", 0)
+        
+        if quality_score is not None:
+            # Criterio 1: Quality Score 100/100 → STOP
+            if quality_score == 100:
+                print(f"\n🎉 Quality Score 100/100! Macchina perfetta.")
+                return True
+            
+            # Criterio 2: Quality ≥ 90 E 0 critical issues → STOP
+            if quality_score >= 90 and critical_issues == 0:
+                print(f"\n✅ Quality Score {quality_score}/100 con 0 critical issues. Qualità sufficiente.")
+                return True
+        
+        return False
     
     def _run_iteration(self) -> dict:
         """Esegue una singola iterazione del loop."""
@@ -180,6 +233,8 @@ class AutonomousLoop:
             score = validator_result["quality_score"]
             dead_ends = validator_result.get("dead_end_count", 0)
             print(f"  Quality Score: {score}/100, Dead-end states: {dead_ends}")
+            # Traccia Quality Score per convergenza
+            self.quality_history.append(score)
             if dead_ends > 0:
                 result["warnings"] = result.get("warnings", []) + [f"{dead_ends} dead-end states found"]
         
@@ -197,12 +252,28 @@ class AutonomousLoop:
         if critic_result.get("error"):
             result["errors"].append(f"Critic: {critic_result['error']}")
         
-        # Check completion criteria (skip if force_iterations is True)
+        # Check quality-based stop criteria (dopo validator + critic)
         if not self.force_iterations:
-            critical_errors = critic_result.get("critical_issues", 0)
-            if critical_errors == 0 and not result["errors"]:
+            # Prima check quality score e critical issues
+            if self._check_quality_stop(validator_result, critic_result):
                 result["completed"] = True
-                print("\n✅ Nessun errore critico - Loop completato!")
+                print("\n✅ Qualità sufficiente - Loop completato!")
+            else:
+                # Check se ci sono problemi strutturali dal validator
+                has_structural_issues = (
+                    validator_result.get("dead_end_count", 0) > 0 or
+                    validator_result.get("unreachable_count", 0) > 0 or
+                    validator_result.get("cycle_count", 0) > 0
+                )
+                
+                critical_errors = critic_result.get("critical_issues", 0)
+                
+                # Non fermare se ci sono problemi strutturali O critical issues
+                if not has_structural_issues and critical_errors == 0 and not result["errors"]:
+                    result["completed"] = True
+                    print("\n✅ Nessun errore critico - Loop completato!")
+                elif has_structural_issues:
+                    print(f"\n⚠️  Problemi strutturali rilevati - continuo iterazione...")
         else:
             print(f"\n🔄 Iterazione {self.iteration}/{self.max_iterations} completata (force mode)")
         
@@ -246,8 +317,16 @@ class AutonomousLoop:
         try:
             env = os.environ.copy()
             script = os.path.join(SCRIPT_DIR, "analyst.py")
+            
+            # Costruisci argomenti: passa anche il feedback del critic se esiste
+            args = ["python3", script, "--context", self.context_file]
+            
+            # Se esiste un feedback del critic dalle iterazioni precedenti, passalo all'analista
+            if os.path.exists(self.critic_feedback):
+                args.extend(["--critic-feedback", self.critic_feedback])
+            
             result = subprocess.run(
-                ["python3", script, "--context", self.context_file],
+                args,
                 capture_output=True,
                 text=True,
                 timeout=300,
@@ -277,12 +356,28 @@ class AutonomousLoop:
             return {"error": str(e)}
     
     def _run_spec(self) -> dict:
-        """Esegue la generazione della spec."""
+        """Esegue la generazione della spec (approccio iterativo)."""
         try:
             env = os.environ.copy()
             script = os.path.join(SCRIPT_DIR, "spec.py")
+            
+            # Costruisci argomenti: passa tutto per approccio iterativo
+            args = ["python3", script, "--context", self.context_file]
+            
+            # Suggerimenti dell'analista
+            if os.path.exists(self.analyst_output):
+                args.extend(["--suggestions", self.analyst_output])
+            
+            # Macchina esistente (per iterazioni successive)
+            if os.path.exists(self.spec_machine):
+                args.extend(["--machine", self.spec_machine])
+            
+            # Critic feedback (per correggere issues)
+            if os.path.exists(self.critic_feedback):
+                args.extend(["--critic-feedback", self.critic_feedback])
+            
             result = subprocess.run(
-                ["python3", script, "--context", self.context_file],
+                args,
                 capture_output=True,
                 text=True,
                 timeout=300,
@@ -334,6 +429,8 @@ class AutonomousLoop:
             output_text = result.stdout or ""
             quality_score = None
             dead_end_count = 0
+            unreachable_count = 0
+            cycle_count = 0
             
             for line in output_text.split("\n"):
                 if "Quality Score:" in line:
@@ -346,11 +443,23 @@ class AutonomousLoop:
                         dead_end_count = int(line.split("(")[1].split(")")[0])
                     except:
                         pass
+                if "STATI NON RAGGIUNGIBILI" in line:
+                    try:
+                        unreachable_count = int(line.split("(")[1].split(")")[0])
+                    except:
+                        pass
+                if "CICLI INFINITI" in line:
+                    try:
+                        cycle_count = int(line.split("(")[1].split(")")[0])
+                    except:
+                        pass
             
             return {
                 "success": True,
                 "quality_score": quality_score,
                 "dead_end_count": dead_end_count,
+                "unreachable_count": unreachable_count,
+                "cycle_count": cycle_count,
                 "exit_code": result.returncode
             }
             
@@ -388,6 +497,42 @@ class AutonomousLoop:
             
         except subprocess.TimeoutExpired:
             return {"error": "Fuzzer timeout"}
+        except Exception as e:
+            return {"error": str(e)}
+    
+    def _run_ui_generator(self) -> dict:
+        """Esegue il UI Generator per creare specifiche UI dalla macchina a stati."""
+        try:
+            env = os.environ.copy()
+            script = os.path.join(SCRIPT_DIR, "ui_generator.py")
+            ui_output_dir = os.path.join(OUTPUT_DIR, "ui_specs")
+            
+            result = subprocess.run(
+                ["python3", script, 
+                 "--machine", self.spec_machine,
+                 "--context", self.context_file,
+                 "--output-dir", ui_output_dir],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                env=env
+            )
+            
+            if result.stdout:
+                for line in result.stdout.strip().split("\n"):
+                    if line.strip():
+                        print(f"  {line}")
+            
+            if result.returncode == 0:
+                print(f"\n  ✅ UI specs generate in {ui_output_dir}/")
+                print(f"     Apri {ui_output_dir}/README.md per navigare.")
+                return {"success": True, "output_dir": ui_output_dir}
+            else:
+                print(f"\n  ⚠️  UI Generator ha restituito errore: {result.returncode}")
+                return {"error": f"Exit code {result.returncode}"}
+            
+        except subprocess.TimeoutExpired:
+            return {"error": "UI Generator timeout"}
         except Exception as e:
             return {"error": str(e)}
     
@@ -509,6 +654,8 @@ def main():
                         help=f"Directory per checkpoint (default: {DEFAULT_CHECKPOINT_DIR})")
     parser.add_argument("--force", action="store_true",
                         help="Forza tutte le iterazioni anche senza errori critici")
+    parser.add_argument("--generate-ui", action="store_true",
+                        help="Genera specifiche UI dalla macchina a stati (al termine del loop)")
     args = parser.parse_args()
     
     # Se input-dir è fornito, non serve che il contesto esista già
@@ -530,7 +677,8 @@ def main():
         time_budget=args.time_budget,
         checkpoint_dir=args.checkpoint_dir,
         force_iterations=args.force,
-        input_dir=args.input_dir
+        input_dir=args.input_dir,
+        generate_ui=args.generate_ui
     )
     
     report = loop.run()

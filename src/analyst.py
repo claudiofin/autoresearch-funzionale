@@ -60,7 +60,7 @@ def get_llm_client():
         sys.exit(1)
 
 
-def call_llm(context_text: str, max_retries: int = 3) -> dict:
+def call_llm(context_text: str, critic_feedback: str = None, max_retries: int = 3) -> dict:
     """Chiama l'LLM per analizzare il contesto e generare suggerimenti."""
     client, model = get_llm_client()
     
@@ -77,10 +77,26 @@ def call_llm(context_text: str, max_retries: int = 3) -> dict:
         if len(context_text) > max_context:
             context_text = context_text[:max_context]
     
+    # Costruisci il prompt con eventuale feedback del critic
+    critic_section = ""
+    if critic_feedback:
+        critic_section = f"""
+
+FEEDBACK DEL CRITIC (CORREGGI QUESTI PROBLEMI):
+{critic_feedback}
+
+ISTRUZIONI:
+- Analizza attentamente i critical_issues elencati dal critic
+- Per OGNI critical issue, modifica la macchina a stati per risolverlo
+- Priorità: 1) Dead-end states (aggiungi transizioni di uscita), 2) Logic errors (correggi transizioni), 3) Missing flows (aggiungi stati/transizioni mancanti)
+- Mantieni tutto il resto invariato se non è menzionato nel feedback
+"""
+    
     prompt = f"""Analizza questo contesto di progetto e genera una specifica funzionale.
 
 Contesto:
 {context_text}
+{critic_section}
 
 Rispondi SOLO con JSON valido (nessun markdown, nessun codice extra):
 
@@ -191,6 +207,8 @@ def main():
                         help="Context file")
     parser.add_argument("--output", type=str, default="output/analyst/analyst_suggestions.json",
                         help="Output JSON file")
+    parser.add_argument("--critic-feedback", type=str, default=None,
+                        help="Critic feedback JSON file (per correzione iterativa)")
     args = parser.parse_args()
     
     print("=" * 50)
@@ -198,17 +216,30 @@ def main():
     print("=" * 50)
     print(f"Contesto: {args.context}")
     print(f"Output: {args.output}")
+    if args.critic_feedback:
+        print(f"Critic feedback: {args.critic_feedback}")
     print()
     
     # Read context
     with open(args.context, "r", encoding="utf-8") as f:
         context_text = f.read()
     
+    # Read critic feedback if provided
+    critic_text = None
+    if args.critic_feedback and os.path.exists(args.critic_feedback):
+        with open(args.critic_feedback, "r", encoding="utf-8") as f:
+            critic_data = json.load(f)
+        # Estrai solo i critical issues per il prompt
+        critical_issues = critic_data.get("critical_issues", [])
+        if critical_issues:
+            critic_text = json.dumps(critical_issues, indent=2, ensure_ascii=False)
+            print(f"  📋 Critic feedback caricato: {len(critical_issues)} critical issues")
+    
     print(f"Contesto caricato: {len(context_text)} caratteri")
     print("  🚀 Esecuzione con LLM...")
     
     # Call LLM
-    result = call_llm(context_text)
+    result = call_llm(context_text, critic_feedback=critic_text)
     
     # Write output
     os.makedirs(os.path.dirname(args.output) if os.path.dirname(args.output) else ".", exist_ok=True)
