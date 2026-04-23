@@ -225,7 +225,7 @@ def generate_state_spec_llm(state_name: str, state_def: dict, machine: dict, con
 {design_system}
 ```
 CRITICAL INSTRUCTION: When listing "UI Components" and "UI Notes", you MUST use exclusively the design tokens (colors, spacing, typography, rounded, components) defined above.
-Do NOT invent generic classes (e.g., do NOT say 'use a bg-blue-500', but use the color `{colors.primary}`).
+Do NOT invent generic classes (e.g., do NOT say 'use a bg-blue-500', but use the color '{{{{colors.primary}}}}').
 Reference component variants like `button-primary`, `button-success` etc. as defined in the components section.
 """
     
@@ -297,8 +297,8 @@ Identify the physical screens of the product (e.g., Login, Dashboard). For each 
 
 Respond ONLY with a valid JSON array. Example:
 [
-  {"name": "01_login", "states": ["app_idle", "authenticating", "session_expired"]},
-  {"name": "02_dashboard", "states": ["dashboard_ready", "loading_dashboard"]}
+  {{"name": "01_login", "states": ["app_idle", "authenticating", "session_expired"]}},
+  {{"name": "02_dashboard", "states": ["dashboard_ready", "loading_dashboard"]}}
 ]
 Do not add markdown like ```json, just print the array.
 """
@@ -365,7 +365,7 @@ Generate a complete Markdown file for screen '{screen_name}' that includes:
 2. **Required Data** — Realistic mock data.
 3. **UI Components** — Component list. RIGIDLY map each button/action to the corresponding XState event. Use design tokens from the Design System section.
 4. **UI States** — How the screen appears during loading, error, or empty states, based on the related states provided.
-5. **Notes for AI Generators (v0 / Claude)** — Specific style instructions. Reference design tokens explicitly (e.g., "Use {colors.primary} for primary actions").
+5. **Notes for AI Generators (v0 / Claude)** — Specific style instructions. Reference design tokens explicitly (e.g., "Use {{{{colors.primary}}}} for primary actions").
 
 The file must be ready for copy-paste into v0.dev.
 """
@@ -424,6 +424,8 @@ def generate_plantuml(machine: dict) -> str:
 def main():
     import argparse
     
+    global LLM_PROVIDER, LLM_MODEL, LLM_API_KEY, LLM_BASE_URL
+    
     parser = argparse.ArgumentParser(description="Dynamically generate UI specifications with LLM")
     parser.add_argument("--machine", default="output/spec/spec_machine.json", help="Path to spec_machine.json")
     parser.add_argument("--context", default="output/context/project_context.md", help="Path to project_context.md")
@@ -439,7 +441,6 @@ def main():
     parser.add_argument("--force-design", action="store_true", help="Force regeneration of DESIGN.md even if it exists")
     args = parser.parse_args()
     
-    global LLM_PROVIDER, LLM_MODEL, LLM_API_KEY, LLM_BASE_URL
     LLM_PROVIDER = args.provider
     LLM_MODEL = args.model
     LLM_API_KEY = args.api_key or LLM_API_KEY

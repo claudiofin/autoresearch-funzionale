@@ -305,11 +305,23 @@ Respond ONLY with valid JSON:
 Rules:
 1. 100% valid JSON - no text outside
 2. snake_case for states, UPPER_CASE for events
-3. Every API state has ERROR, TIMEOUT, CANCEL
-4. Cover: auth, core flow, error handling, empty states
-5. Initial state: app_idle (MUST exist)
-6. Every state must have at least one exit transition (no dead-end)
-7. All states must be reachable from app_idle
+3. Use CONSOLIDATED events: ON_SUCCESS, ON_ERROR, CANCEL (not multiple variants like DATA_LOADED, DATA_FETCHED, FETCH_ERROR, etc.)
+4. ON_SUCCESS transition: use guard "hasData" to go to "success" if data exists, otherwise to "empty"
+5. ON_ERROR transition: single event for all error types (network, timeout, server error)
+6. CANCEL transition: use guard "hasPreviousState" to return to previous state (e.g., success during refresh), otherwise to app_idle
+7. RETRY_FETCH in error state: MUST have guard "canRetry" (context.retryCount < 3)
+8. When retry fails, use assign action to increment retryCount: { "type": "assign", "expr": "context.retryCount + 1" }
+9. After 3 failed retries, transition to "session_expired" or "max_retries_exceeded" state
+10. Cover: auth, core flow, error handling, empty states
+11. Initial state: app_idle (MUST exist)
+12. Every state must have at least one exit transition (no dead-end)
+13. All states must be reachable from app_idle
+
+TRANSITION FORMAT:
+- Simple: { "EVENT": "target_state" }
+- With guard: { "EVENT": { "target": "target_state", "cond": "guardName" } }
+- With actions: { "EVENT": { "target": "target_state", "actions": ["actionName"] } }
+- With guard and actions: { "EVENT": { "target": "target_state", "cond": "guardName", "actions": ["actionName"] } }
 """
     
     print(f"  🤖 Calling LLM for spec ({model}), context: {len(context_text)} chars...")
@@ -450,13 +462,25 @@ def run_analysis(context_file: str, output_file: str, time_budget: int,
                 new_exit = state.get("exit_actions", [])
                 machine["states"][state_name]["exit"] = list(set(existing_exit + new_exit))
         
-        # Add new transitions
+        # Add new transitions (support guards and actions)
         for trans in llm_data.get("transitions", []):
             from_state = trans["from_state"]
             to_state = trans["to_state"]
             event = trans["event"]
+            guard = trans.get("guard") or trans.get("cond")
+            actions = trans.get("actions", [])
+            
             if from_state in machine["states"]:
-                machine["states"][from_state]["on"][event] = to_state
+                # Build transition object
+                if guard or actions:
+                    transition = {"target": to_state}
+                    if guard:
+                        transition["cond"] = guard
+                    if actions:
+                        transition["actions"] = actions
+                    machine["states"][from_state]["on"][event] = transition
+                else:
+                    machine["states"][from_state]["on"][event] = to_state
     else:
         # Generate from scratch
         machine = generate_base_machine()
@@ -469,12 +493,25 @@ def run_analysis(context_file: str, output_file: str, time_budget: int,
                 "on": {}
             }
         
+        # Add transitions (support guards and actions)
         for trans in llm_data.get("transitions", []):
             from_state = trans["from_state"]
             to_state = trans["to_state"]
             event = trans["event"]
+            guard = trans.get("guard") or trans.get("cond")
+            actions = trans.get("actions", [])
+            
             if from_state in machine["states"]:
-                machine["states"][from_state]["on"][event] = to_state
+                # Build transition object
+                if guard or actions:
+                    transition = {"target": to_state}
+                    if guard:
+                        transition["cond"] = guard
+                    if actions:
+                        transition["actions"] = actions
+                    machine["states"][from_state]["on"][event] = transition
+                else:
+                    machine["states"][from_state]["on"][event] = to_state
     
     # Fix: if LLM used 'idle' instead of 'app_idle', normalize
     if "idle" in machine["states"] and machine["initial"] == "app_idle":
