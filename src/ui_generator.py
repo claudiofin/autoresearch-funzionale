@@ -125,6 +125,8 @@ def call_llm(prompt: str, system_prompt: str = "", max_tokens: int = 4096) -> st
         return _call_anthropic(prompt, system_prompt, max_tokens)
     elif LLM_PROVIDER == "ollama":
         return _call_ollama(prompt, system_prompt, max_tokens)
+    elif LLM_PROVIDER == "dashscope":
+        return _call_dashscope(prompt, system_prompt, max_tokens)
     else:
         raise ValueError(f"Unsupported LLM provider: {LLM_PROVIDER}")
 
@@ -198,6 +200,32 @@ def _call_ollama(prompt: str, system_prompt: str, max_tokens: int) -> str:
         sys.exit(1)
     except Exception as e:
         print(f"❌ Ollama Error: {e}")
+        sys.exit(1)
+
+
+def _call_dashscope(prompt: str, system_prompt: str, max_tokens: int) -> str:
+    """Calls DashScope API (Alibaba Cloud)."""
+    try:
+        from openai import OpenAI
+        base_url = LLM_BASE_URL or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        client = OpenAI(api_key=LLM_API_KEY, base_url=base_url)
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        
+        response = client.chat.completions.create(
+            model=LLM_MODEL or "qwen-plus",
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=0.7,
+        )
+        return response.choices[0].message.content
+    except ImportError:
+        print("❌ Install openai: pip install openai")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ DashScope Error: {e}")
         sys.exit(1)
 
 
@@ -392,6 +420,26 @@ Include:
     return call_llm(prompt, system_prompt)
 
 
+def _extract_plantuml_targets(target) -> list:
+    """Extract target state names for PlantUML generation."""
+    if isinstance(target, str):
+        return [target]
+    elif isinstance(target, dict):
+        t = target.get("target", "")
+        return [t] if t else []
+    elif isinstance(target, list):
+        targets = []
+        for item in target:
+            if isinstance(item, dict):
+                t = item.get("target", "")
+                if t:
+                    targets.append(t)
+            elif isinstance(item, str):
+                targets.append(item)
+        return targets
+    return []
+
+
 def generate_plantuml(machine: dict) -> str:
     """Generates PlantUML flat syntax code."""
     uml = "@startuml\n"
@@ -414,8 +462,9 @@ def generate_plantuml(machine: dict) -> str:
     # Flat Syntax: Then arrows
     for state_name, state_def in machine.get("states", {}).items():
         transitions = state_def.get("on", {})
-        for event, dest in transitions.items():
-            uml += f"{state_name} --> {dest} : {event}\n"
+        for event, target in transitions.items():
+            for dest in _extract_plantuml_targets(target):
+                uml += f"{state_name} --> {dest} : {event}\n"
     
     uml += "@enduml"
     return uml
@@ -431,13 +480,13 @@ def main():
     parser.add_argument("--context", default="output/context/project_context.md", help="Path to project_context.md")
     parser.add_argument("--spec", default="output/spec/spec.md", help="Path to spec.md")
     parser.add_argument("--output-dir", default="output/ui_specs", help="Output directory")
-    parser.add_argument("--provider", choices=["openai", "anthropic", "ollama"], default=LLM_PROVIDER, help="LLM Provider")
+    parser.add_argument("--provider", choices=["openai", "anthropic", "ollama", "dashscope"], default=LLM_PROVIDER, help="LLM Provider")
     parser.add_argument("--model", default=LLM_MODEL, help="LLM Model")
     parser.add_argument("--api-key", default=LLM_API_KEY, help="LLM API Key")
     parser.add_argument("--base-url", default=LLM_BASE_URL, help="LLM Base URL")
     parser.add_argument("--states-only", action="store_true", help="Generate only states")
     parser.add_argument("--screens-only", action="store_true", help="Generate only screens")
-    parser.add_argument("--design", default="DESIGN.md", help="Path to Design System file")
+    parser.add_argument("--design", default="output/ui_specs/DESIGN.md", help="Path to Design System file")
     parser.add_argument("--force-design", action="store_true", help="Force regeneration of DESIGN.md even if it exists")
     args = parser.parse_args()
     

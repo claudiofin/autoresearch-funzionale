@@ -316,6 +316,7 @@ Rules:
 11. Initial state: app_idle (MUST exist)
 12. Every state must have at least one exit transition (no dead-end)
 13. All states must be reachable from app_idle
+14. HIERARCHICAL STATES: The "success" state MUST be hierarchical (nested). Analyze the project context and create a sub-state for each main area/screen of the app (e.g., for e-commerce: catalog, cart, profile; for some app: dashboard, catalog, offers, benchmark, groups). Each sub-state should have navigation events to other sub-states (e.g., NAVIGATE_CATALOGO, NAVIGATE_OFFERTE). This allows the UI generator to create separate screen files for each area.
 
 TRANSITION FORMAT:
 - Simple: EVENT -> target_state
