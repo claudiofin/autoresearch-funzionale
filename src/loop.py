@@ -161,6 +161,12 @@ class AutonomousLoop:
         if not self.force_iterations and len(self.quality_history) >= 1:
             latest_quality = self.quality_history[-1]
             
+            # Require at least 2 iterations before stopping for quality
+            # (first iteration often gets 100 on structure alone, 
+            # but critic/fuzzer may find issues in subsequent passes)
+            if self.iteration < 2:
+                return True
+            
             # Criterion 1: Quality Score 100/100 → immediate STOP
             if latest_quality == 100:
                 print(f"\n🎉 Quality Score 100/100 reached! Loop completed.")
@@ -255,8 +261,13 @@ class AutonomousLoop:
         
         # Check quality-based stop criteria (after validator + critic)
         if not self.force_iterations:
+            # Require at least 2 iterations before stopping for quality
+            # (first iteration often gets 100 on structure alone,
+            # but critic/fuzzer may find issues in subsequent passes)
+            can_stop_for_quality = self.iteration >= 2
+            
             # First check quality score and critical issues
-            if self._check_quality_stop(validator_result, critic_result):
+            if can_stop_for_quality and self._check_quality_stop(validator_result, critic_result):
                 result["completed"] = True
                 print("\n✅ Sufficient quality - Loop completed!")
             else:
@@ -267,11 +278,14 @@ class AutonomousLoop:
                 )
                 
                 critical_errors = critic_result.get("critical_issues", 0)
+                fuzz_errors = fuzz_result.get("errors", 0)
                 
-                # Don't stop if there are structural issues OR critical errors
-                if not has_structural_issues and critical_errors == 0 and not result["errors"]:
+                # Don't stop if there are structural issues OR critical errors OR fuzzer errors
+                if not has_structural_issues and critical_errors == 0 and fuzz_errors == 0 and not result["errors"]:
                     result["completed"] = True
                     print("\n✅ No critical errors - Loop completed!")
+                elif fuzz_errors > 0:
+                    print(f"\n⚠️  Fuzzer found {fuzz_errors} errors - continuing iteration...")
                 elif has_structural_issues:
                     print(f"\n⚠️  Structural issues detected - continuing iteration...")
         else:

@@ -317,25 +317,23 @@ REQUIRED ACTIONS:
     else:
         task = "Generate a new state machine from the context."
     
-    prompt = f"""{task}
+    # Build prompt using concatenation to avoid f-string nesting limit
+    prompt = task + """
 
 Project context:
-{context_text}
-{existing_section}
-{suggestions_section}
-{critic_section}
+""" + context_text + existing_section + suggestions_section + critic_section + """
 
 Respond ONLY with valid JSON:
 
-{{
-  "states": [{{"name": "snake_case", "description": "...", "entry_actions": [], "exit_actions": [], "sub_states": [], "initial_sub_state": null}}],
-  "transitions": [{{"from_state": "...", "to_state": "...", "event": "UPPER_CASE", "guard": null}}],
-  "edge_cases": [{{"id": "EC001", "scenario": "...", "trigger": "...", "expected_behavior": "...", "priority": "high"}}],
-  "flows": [{{"name": "...", "steps": [{{"trigger": "...", "action": "...", "expected_outcome": "...", "error_scenario": "..."}}]}}],
-  "api_endpoints": [{{"method": "GET", "path": "...", "description": "..."}}],
-  "error_handling": [{{"code": 404, "type": "Not Found", "message": "User friendly message", "action": "Return home"}}],
-  "data_validation": [{{"field": "email", "type": "string", "required": true, "pattern": "RFC 5322", "max_length": 254}}]
-}}
+{
+  "states": [{"name": "snake_case", "description": "...", "entry_actions": [], "exit_actions": [], "sub_states": [], "initial_sub_state": null}],
+  "transitions": [{"from_state": "...", "to_state": "...", "event": "UPPER_CASE", "guard": null}],
+  "edge_cases": [{"id": "EC001", "scenario": "...", "trigger": "...", "expected_behavior": "...", "priority": "high"}],
+  "flows": [{"name": "...", "steps": [{"trigger": "...", "action": "...", "expected_outcome": "...", "error_scenario": "..."}]}],
+  "api_endpoints": [{"method": "GET", "path": "...", "description": "..."}],
+  "error_handling": [{"code": 404, "type": "Not Found", "message": "User friendly message", "action": "Return home"}],
+  "data_validation": [{"field": "email", "type": "string", "required": true, "pattern": "RFC 5322", "max_length": 254}]
+}
 
 Rules:
 1. 100% valid JSON - no text outside
@@ -353,38 +351,60 @@ Rules:
 13. All states must be reachable from app_idle
 14. HIERARCHICAL STATES: The "success" state MUST be hierarchical (nested). Analyze the project context and create a sub-state for each main area/screen of the app (e.g., for e-commerce: catalog, cart, profile; for some app: dashboard, catalog, offers, benchmark, groups). Each sub-state should have navigation events to other sub-states (e.g., NAVIGATE_CATALOGO, NAVIGATE_OFFERTE). This allows the UI generator to create separate screen files for each area.
 
+15. NO DUPLICATE STATES: Never create two sets of states for the same screens.
+    If you create "dashboard", "catalog", "offers" as sub-states of "success",
+    DO NOT also create "success_dashboard", "success_catalog", "success_offerte".
+    Use ONLY the short names. Each screen = exactly ONE state.
+
+16. app_idle IS A RESTING STATE — use START_APP event:
+    DO NOT put checkAuth, validateCredentials, or any automatic action in app_idle's "entry".
+    Instead, app_idle MUST listen for a "START_APP" event that triggers initial setup:
+      "on": { "START_APP": "authenticating" }
+    The UI layer is responsible for firing START_APP when the app is ready.
+    This prevents infinite loops: app_idle → checkAuth fails → login → cancel → app_idle → ...
+
+17. CLUSTERING MUST BE A SUB-STATE with error exit:
+    If the app has a "clustering" or "calculation" feature inside a page (e.g., Benchmark),
+    it MUST be a sub-state of that page: success.benchmark.clustering_calculation.
+    
+    CRITICAL: Every nested sub-state MUST define an exit path to "error".
+    Either inherit from parent or define explicitly:
+      "on": { "ON_ERROR": ".." }  (goes to parent's error handler)
+    Deep nesting without error exit = broken state machine.
+
 CRITICAL - DO NOT USE THESE REDUNDANT EVENTS (use the consolidated alternatives):
-- ❌ DATA_LOADED, DATA_FETCHED → ✅ ON_SUCCESS (with guard "hasData")
-- ❌ FETCH_ERROR, FETCH_FAILED, TIMEOUT, TIMEOUT_FETCH, ERROR → ✅ ON_ERROR
-- ❌ CANCEL_FETCH → ✅ CANCEL (with guard "hasPreviousState")
-- ❌ RETRY (without guard) → ✅ RETRY_FETCH with cond "canRetry"
+- DATA_LOADED, DATA_FETCHED -> use ON_SUCCESS (with guard "hasData")
+- FETCH_ERROR, FETCH_FAILED, TIMEOUT, TIMEOUT_FETCH, ERROR -> use ON_ERROR
+- CANCEL_FETCH -> use CANCEL (with guard "hasPreviousState")
+- RETRY (without guard) -> use RETRY_FETCH with cond "canRetry"
 
 EXAMPLE - loading state transitions (follow this pattern):
-{
-  "loading": {
-    "entry": ["start_timeout_timer", "show_loading_indicator"],
-    "exit": ["stop_timeout_timer", "hide_loading_indicator"],
-    "on": {
-      "ON_SUCCESS": { "target": "success", "cond": "hasData" },
-      "ON_SUCCESS": { "target": "empty", "cond": "!hasData" },
-      "ON_ERROR": "error",
-      "CANCEL": { "target": "success", "cond": "hasPreviousState" },
-      "CANCEL": { "target": "app_idle", "cond": "!hasPreviousState" }
-    }
-  }
-}
+  In the "transitions" array, you MUST generate BOTH branches for every conditional event:
+  - {"from_state": "loading", "to_state": "success", "event": "ON_SUCCESS", "guard": "hasData"}
+  - {"from_state": "loading", "to_state": "empty", "event": "ON_SUCCESS", "guard": "!hasData"}
+  - {"from_state": "loading", "to_state": "error", "event": "ON_ERROR"}
+  - {"from_state": "loading", "to_state": "success", "event": "CANCEL", "guard": "hasPreviousState"}
+  - {"from_state": "loading", "to_state": "app_idle", "event": "CANCEL", "guard": "!hasPreviousState"}
 
 EXAMPLE - error state transitions (follow this pattern):
-{
-  "error": {
-    "entry": ["log_error", "show_error_message"],
-    "exit": ["hide_error_message"],
-    "on": {
-      "RETRY_FETCH": { "target": "loading", "cond": "canRetry", "actions": ["incrementRetryCount"] },
-      "CANCEL": "app_idle"
-    }
-  }
-}
+  - {"from_state": "error", "to_state": "loading", "event": "RETRY_FETCH", "guard": "canRetry", "actions": ["incrementRetryCount"]}
+  - {"from_state": "error", "to_state": "session_expired", "event": "RETRY_FETCH", "guard": "!canRetry"}
+  - {"from_state": "error", "to_state": "app_idle", "event": "CANCEL"}
+
+CRITICAL RULE - BOTH BRANCHES ARE MANDATORY:
+For EVERY event with a guard condition, you MUST generate TWO transitions in the "transitions" array:
+1. The positive branch (guard: "hasData", "canRetry", "hasPreviousState")
+2. The negative branch (guard: "!hasData", "!canRetry", "!hasPreviousState")
+Missing either branch = INVALID state machine. You will be penalized for incomplete transitions.
+
+PRE-GENERATION CHECKLIST (verify before outputting JSON):
+- [ ] ON_SUCCESS has TWO entries: one with guard "hasData" → success, one with guard "!hasData" → empty
+- [ ] CANCEL has TWO entries: one with guard "hasPreviousState" → success, one with guard "!hasPreviousState" → app_idle
+- [ ] RETRY_FETCH has TWO entries: one with guard "canRetry" → loading, one with guard "!canRetry" → session_expired
+- [ ] Every conditional event appears EXACTLY TWICE in the transitions array (once positive, once negative)
+
+IF YOU MISS ANY BRANCH, THE STATE MACHINE IS BROKEN AND THE USER WILL LOSE DATA.
+This is not a suggestion - it is a REQUIREMENT. Generate BOTH branches for every conditional event.
 
 TRANSITION FORMAT:
 - Simple: EVENT -> target_state
@@ -450,6 +470,111 @@ TRANSITION FORMAT:
     
     print("❌ ERROR: All LLM attempts failed.")
     sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Post-Processing: Complete Missing Transition Branches
+# ---------------------------------------------------------------------------
+
+def _complete_missing_branches(machine: dict) -> dict:
+    """Ensure every conditional event has BOTH positive and negative branches.
+    
+    The LLM often generates only the negative branch (e.g., "!hasData" → empty)
+    but forgets the positive branch (e.g., "hasData" → success). This function
+    detects missing branches and adds them automatically.
+    """
+    # Define expected branch pairs for known conditional events
+    BRANCH_RULES = {
+        "ON_SUCCESS": {
+            "positive_guard": "hasData",
+            "positive_target": "success",
+            "negative_guard": "!hasData",
+            "negative_target": "empty",
+        },
+        "CANCEL": {
+            "positive_guard": "hasPreviousState",
+            "positive_target": "success",
+            "negative_guard": "!hasPreviousState",
+            "negative_target": "app_idle",
+        },
+        "RETRY_FETCH": {
+            "positive_guard": "canRetry",
+            "positive_target": "loading",
+            "negative_guard": "!canRetry",
+            "negative_target": "session_expired",
+        },
+    }
+    
+    all_states = machine.get("states", {})
+    fixed_count = 0
+    
+    for state_name, state_config in all_states.items():
+        on_events = state_config.get("on", {})
+        
+        for event_name, rule in BRANCH_RULES.items():
+            if event_name not in on_events:
+                continue
+            
+            # Get existing transition(s) for this event
+            existing = on_events[event_name]
+            
+            # Normalize to list of transitions
+            if isinstance(existing, str):
+                # Simple transition without guard - skip (no conditional)
+                continue
+            elif isinstance(existing, dict):
+                existing_list = [existing]
+            elif isinstance(existing, list):
+                existing_list = existing
+            else:
+                continue
+            
+            # Check which guards exist
+            existing_guards = set()
+            for t in existing_list:
+                if isinstance(t, dict):
+                    guard = t.get("cond", "") or t.get("guard", "")
+                    if guard:
+                        existing_guards.add(guard)
+            
+            # Check if positive branch is missing
+            if rule["positive_guard"] not in existing_guards:
+                # Add positive branch
+                if isinstance(existing, dict):
+                    # Convert single transition to list
+                    on_events[event_name] = [existing]
+                    existing_list = on_events[event_name]
+                elif isinstance(existing, str):
+                    on_events[event_name] = [
+                        {"target": existing},
+                        {"target": rule["positive_target"], "cond": rule["positive_guard"]}
+                    ]
+                    fixed_count += 1
+                    continue
+                
+                on_events[event_name].append({
+                    "target": rule["positive_target"],
+                    "cond": rule["positive_guard"]
+                })
+                fixed_count += 1
+                print(f"  🔧 Added missing positive branch: {state_name} --{event_name}[{rule['positive_guard']}]-> {rule['positive_target']}")
+            
+            # Check if negative branch is missing
+            if rule["negative_guard"] not in existing_guards:
+                if isinstance(on_events[event_name], dict):
+                    on_events[event_name] = [on_events[event_name]]
+                
+                on_events[event_name].append({
+                    "target": rule["negative_target"],
+                    "cond": rule["negative_guard"]
+                })
+                fixed_count += 1
+                print(f"  🔧 Added missing negative branch: {state_name} --{event_name}[{rule['negative_guard']}]-> {rule['negative_target']}")
+    
+    if fixed_count > 0:
+        print(f"  ✅ Fixed {fixed_count} missing transition branches")
+    
+    return machine
 
 
 # ---------------------------------------------------------------------------
@@ -521,6 +646,73 @@ def _clean_unreachable_states(machine: dict) -> dict:
         del all_states[state_name]
     
     return machine
+
+
+# ---------------------------------------------------------------------------
+# Post-Processing: Validate No Critical Patterns (Rules 15, 16, 17)
+# ---------------------------------------------------------------------------
+
+def _validate_no_critical_patterns(machine: dict) -> list:
+    """Validate the machine against critical rules 15, 16, 17.
+    
+    Returns a list of violation messages. Empty list = no violations.
+    Messages are designed to be "speaking" — they tell the LLM exactly what's wrong.
+    """
+    violations = []
+    all_states = machine.get("states", {})
+    
+    # --- Rule 15: No duplicate states (success_* vs *) ---
+    success_state = all_states.get("success", {})
+    success_sub_states = success_state.get("states", {})
+    
+    if success_sub_states:
+        # Find all short names inside success
+        short_names = set(success_sub_states.keys())
+        # Check for success_* duplicates
+        for sub_name in list(short_names):
+            duplicate_name = f"success_{sub_name}"
+            if duplicate_name in success_sub_states:
+                violations.append(
+                    f"VIOLAZIONE REGOLA 15: Hai creato stati duplicati '{duplicate_name}' e '{sub_name}' "
+                    f"entrambi dentro 'success'. Usa SOLO il nome breve '{sub_name}'. "
+                    f"Rimuovi '{duplicate_name}' e tutte le sue transizioni."
+                )
+    
+    # Also check for success_* at top level (shouldn't exist)
+    for state_name in all_states:
+        if state_name.startswith("success_") and state_name != "success":
+            short = state_name.replace("success_", "")
+            violations.append(
+                f"VIOLAZIONE REGOLA 15: Stato '{state_name}' trovato a livello top-level. "
+                f"Se '{short}' è già un sotto-stato di 'success', usa SOLO quello. "
+                f"Rimuovi '{state_name}'."
+            )
+    
+    # --- Rule 16: No checkAuth in app_idle entry ---
+    app_idle = all_states.get("app_idle", {})
+    app_idle_entry = app_idle.get("entry", [])
+    
+    forbidden_idle_actions = {"checkAuth", "validateCredentials", "startAuthTimer", "showAuthLoader"}
+    found_forbidden = forbidden_idle_actions.intersection(set(app_idle_entry))
+    
+    if found_forbidden:
+        violations.append(
+            f"VIOLAZIONE REGOLA 16: app_idle ha azioni automatiche nella 'entry': {', '.join(found_forbidden)}. "
+            f"app_idle è uno stato di riposo — NON deve eseguire azioni automatiche. "
+            f"Rimuovi {', '.join(found_forbidden)} dalla entry di app_idle. "
+            f"Invece, aggiungi un evento START_APP: \"on\": {{ \"START_APP\": \"authenticating\" }}."
+        )
+    
+    # --- Rule 17: clustering_calculation must be a sub-state, not top-level ---
+    if "clustering_calculation" in all_states:
+        violations.append(
+            f"VIOLAZIONE REGOLA 17: 'clustering_calculation' è uno stato top-level. "
+            f"Deve essere un sotto-stato della pagina dove avviene il calcolo (es. success.benchmark.clustering_calculation). "
+            f"Spostalo dentro 'benchmark' come sotto-stato e assicurati che abbia un'uscita verso 'error' "
+            f"(es. \"on\": {{ \"ON_ERROR\": \"..\" }})."
+        )
+    
+    return violations
 
 
 # ---------------------------------------------------------------------------
@@ -710,8 +902,22 @@ def run_analysis(context_file: str, output_file: str, time_budget: int,
     if "app_idle" not in machine["states"]:
         machine["states"]["app_idle"] = {"entry": [], "exit": [], "on": {}}
     
+    # Post-processing: complete missing transition branches
+    machine = _complete_missing_branches(machine)
+    
     # Post-processing: remove unreachable states and XState keywords used as state names
     machine = _clean_unreachable_states(machine)
+    
+    # Post-processing: validate against critical rules 15, 16, 17
+    violations = _validate_no_critical_patterns(machine)
+    if violations:
+        print(f"\n  ⚠️  CRITICAL RULE VIOLATIONS DETECTED ({len(violations)}):")
+        for v in violations:
+            print(f"    ❌ {v}")
+        print(f"\n  💡 These violations will be reported to the critic for the next iteration.")
+        print(f"     The LLM should fix them when it sees the critic feedback.\n")
+    else:
+        print(f"  ✅ No critical rule violations (rules 15, 16, 17 passed)")
     
     print(f"Generated state machine: {len(machine['states'])} states")
     
