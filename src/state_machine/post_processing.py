@@ -1,10 +1,46 @@
 """State machine post-processing.
 
 Handles:
+- Removing top-level duplicate states (when they exist as sub-states of 'success')
 - Completing missing transition branches (both guard paths)
+- Ensuring session_expired has REAUTHENTICATE transition
 - Cleaning unreachable states and XState keywords
 - Validating critical rules (15, 16, 17)
 """
+
+
+# ---------------------------------------------------------------------------
+# Post-Processing: Remove Top-Level Duplicate States
+# ---------------------------------------------------------------------------
+
+def remove_toplevel_duplicates(machine: dict) -> dict:
+    """Remove states at root level if they already exist as sub-states of 'success'.
+    
+    The LLM sometimes creates both 'dashboard' (top-level) and 'success.dashboard' (sub-state).
+    This function removes the top-level duplicates to prevent state machine conflicts.
+    
+    Args:
+        machine: The state machine dict to fix.
+    
+    Returns:
+        Fixed machine dict.
+    """
+    states = machine.get("states", {})
+    success_sub_states = states.get("success", {}).get("states", {})
+    
+    if not success_sub_states:
+        return machine  # No sub-states in success, nothing to do
+    
+    root_keys_to_delete = []
+    for root_state in states.keys():
+        if root_state in success_sub_states and root_state != "success":
+            root_keys_to_delete.append(root_state)
+    
+    for key in root_keys_to_delete:
+        print(f"  🧹 Removed top-level duplicate state: '{key}'")
+        del states[key]
+    
+    return machine
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +147,15 @@ def complete_missing_branches(machine: dict) -> dict:
                 })
                 fixed_count += 1
                 print(f"  🔧 Added missing negative branch: {state_name} --{event_name}[{rule['negative_guard']}]-> {rule['negative_target']}")
+    
+    # FIX: Ensure session_expired is not a dead-end state
+    if "session_expired" in all_states:
+        se_config = all_states["session_expired"]
+        if "on" not in se_config:
+            se_config["on"] = {}
+        if "REAUTHENTICATE" not in se_config["on"]:
+            print("  🔧 Added REAUTHENTICATE → authenticating transition to 'session_expired'")
+            se_config["on"]["REAUTHENTICATE"] = "authenticating"
     
     if fixed_count > 0:
         print(f"  ✅ Fixed {fixed_count} missing transition branches")

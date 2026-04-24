@@ -90,11 +90,11 @@ Rules:
 11. Initial state: app_idle (MUST exist)
 12. Every state must have at least one exit transition (no dead-end)
 13. All states must be reachable from app_idle
-14. HIERARCHICAL STATES: The "success" state MUST be hierarchical (nested). Analyze the project context and create a sub-state for each main area/screen of the app (e.g., for e-commerce: catalog, cart, profile; for some app: dashboard, catalog, offers, benchmark, groups). Each sub-state should have navigation events to other sub-states (e.g., NAVIGATE_CATALOGO, NAVIGATE_OFFERTE). This allows the UI generator to create separate screen files for each area.
+14. HIERARCHICAL STATES: The "success" state MUST be hierarchical (nested). Analyze the project context and create a sub-state for each main area/screen of the app (e.g., for e-commerce: catalog, cart, profile). Each sub-state should have navigation events to other sub-states (e.g., NAVIGATE_CATALOG, NAVIGATE_PROFILE). This allows the UI generator to create separate screen files for each area.
 
 15. NO DUPLICATE STATES: Never create two sets of states for the same screens.
-    If you create "dashboard", "catalog", "offers" as sub-states of "success",
-    DO NOT also create "success_dashboard", "success_catalog", "success_offerte".
+    If you create "dashboard", "settings", "profile" as sub-states of "success",
+    DO NOT also create "success_dashboard", "success_settings", "success_profile".
     Use ONLY the short names. Each screen = exactly ONE state.
 
 16. app_idle IS A RESTING STATE — use START_APP event:
@@ -104,9 +104,9 @@ Rules:
     The UI layer is responsible for firing START_APP when the app is ready.
     This prevents infinite loops: app_idle → checkAuth fails → login → cancel → app_idle → ...
 
-17. CLUSTERING MUST BE A SUB-STATE with error exit:
-    If the app has a "clustering" or "calculation" feature inside a page (e.g., Benchmark),
-    it MUST be a sub-state of that page: success.benchmark.clustering_calculation.
+17. COMPLEX OPERATIONS MUST BE SUB-STATES with error exit:
+    If a page has complex background processing or data calculation,
+    it MUST be a sub-state of that page (e.g., success.dashboard.data_processing).
     
     CRITICAL: Every nested sub-state MUST define an exit path to "error".
     Either inherit from parent or define explicitly:

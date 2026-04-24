@@ -4,9 +4,44 @@ Handles:
 - Base machine generation
 - State config building (flat and hierarchical)
 - Transition addition with guard/action support
+- XState action formatting (assign actions for context updates)
 """
 
 import json
+
+
+def _format_xstate_actions(actions_list: list) -> list:
+    """Format textual actions into valid XState v5 actions.
+    
+    Converts action strings like 'incrementRetryCount' into XState assign actions
+    that actually update the machine context.
+    
+    Args:
+        actions_list: List of action strings from LLM (e.g., ['incrementRetryCount', 'show_toast'])
+    
+    Returns:
+        List of XState-compatible actions (strings and/or assign objects).
+    """
+    formatted = []
+    for action in actions_list:
+        if action == "incrementRetryCount":
+            formatted.append({
+                "type": "assign",
+                "assignment": {
+                    "retryCount": lambda ctx: ctx.get("retryCount", 0) + 1
+                }
+            })
+        elif action == "setPreviousState":
+            formatted.append({
+                "type": "assign",
+                "assignment": {
+                    "previousState": lambda ctx, evt, meta: meta.state.value
+                }
+            })
+        else:
+            # Keep as string for side-effect actions (show_toast, log, etc.)
+            formatted.append(action)
+    return formatted
 
 
 def generate_base_machine() -> dict:
@@ -103,7 +138,7 @@ def add_transitions(machine: dict, transitions: list):
                 if guard:
                     transition["cond"] = guard
                 if actions:
-                    transition["actions"] = actions
+                    transition["actions"] = _format_xstate_actions(actions)
                 target_dict[resolved_from]["on"][event] = transition
             else:
                 target_dict[resolved_from]["on"][event] = to_state

@@ -200,8 +200,10 @@ Do not add markdown like ```json, just print the array.
         all_states = list(machine.get("states", {}).keys())
         auth_states = [s for s in all_states if any(k in s.lower() for k in ["idle", "auth", "session", "expired"])]
         loading_states = [s for s in all_states if "loading" in s.lower() or s == "initial"]
-        content_states = [s for s in all_states if any(k in s.lower() for k in ["success", "dashboard", "catalog", "offers", "benchmark", "groups"])]
         error_states = [s for s in all_states if any(k in s.lower() for k in ["error", "empty"])]
+        
+        # Consider any state that is not auth, loading, or error as a content state
+        content_states = [s for s in all_states if s not in auth_states and s not in loading_states and s not in error_states]
         
         fallback = []
         if auth_states:

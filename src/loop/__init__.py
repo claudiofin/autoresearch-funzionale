@@ -113,6 +113,35 @@ class AutonomousLoop:
             print(f"Input dir: {self.input_dir} (automatic ingest)")
         print()
         
+        # Pre-flight: Validate LLM environment
+        print("🔍 Pre-flight checks...")
+        llm_valid, llm_errors = FrontendRunner.validate_llm_env()
+        if not llm_valid:
+            print("  ❌ LLM environment validation failed:")
+            for err in llm_errors:
+                print(f"     {err}")
+            print()
+            print("💡 Set the required environment variables before running:")
+            print("   export LLM_API_KEY=sk-...")
+            print("   export LLM_PROVIDER=openai  # or anthropic, google, dashscope")
+            print("   export LLM_MODEL=gpt-4o     # optional, uses provider default")
+            print()
+            return {
+                "completed": False,
+                "iterations_run": 0,
+                "max_iterations": self.max_iterations,
+                "time_budget": self.time_budget,
+                "elapsed_seconds": 0,
+                "final_errors": len(llm_errors),
+                "final_warnings": 0,
+                "history": [],
+                "error": "LLM environment validation failed",
+                "llm_errors": llm_errors
+            }
+        
+        FrontendRunner.print_llm_config()
+        print("  ✅ LLM environment OK\n")
+        
         # Step 0: Ingest (if input_dir provided)
         if self.input_dir:
             self._run_ingest()

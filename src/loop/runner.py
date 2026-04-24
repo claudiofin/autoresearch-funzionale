@@ -20,6 +20,17 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 SRC_DIR = os.path.dirname(SCRIPT_DIR)
 OUTPUT_DIR = "./output"
 
+# Required environment variables for LLM calls
+REQUIRED_LLM_ENV_VARS = ["LLM_API_KEY"]
+
+# Supported providers and their default models
+SUPPORTED_PROVIDERS = {
+    "openai": {"model": "gpt-4o", "base_url": "https://api.openai.com/v1"},
+    "anthropic": {"model": "claude-3-5-sonnet-20241022", "base_url": "https://api.anthropic.com"},
+    "google": {"model": "gemini-2.5-flash", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai"},
+    "dashscope": {"model": "qwen-max", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+}
+
 
 class FrontendRunner:
     """Executes frontend pipeline steps as subprocess calls."""
@@ -41,6 +52,46 @@ class FrontendRunner:
         self.fuzz_report = fuzz_report
         self.critic_feedback = critic_feedback
         self.force_design = force_design
+    
+    @staticmethod
+    def validate_llm_env() -> tuple[bool, list[str]]:
+        """Validate that required LLM environment variables are set.
+        
+        Returns:
+            Tuple of (is_valid, list_of_errors)
+        """
+        errors = []
+        
+        # Check required vars
+        for var in REQUIRED_LLM_ENV_VARS:
+            if not os.getenv(var):
+                errors.append(f"❌ {var} is not set")
+        
+        # Check provider configuration
+        provider = os.getenv("LLM_PROVIDER", "")
+        if provider and provider not in SUPPORTED_PROVIDERS:
+            errors.append(f"⚠️  Unknown provider '{provider}'. Supported: {', '.join(SUPPORTED_PROVIDERS.keys())}")
+        
+        # If custom provider, check base_url and model
+        if provider and provider not in SUPPORTED_PROVIDERS:
+            if not os.getenv("LLM_BASE_URL"):
+                errors.append(f"❌ LLM_BASE_URL is required for custom provider '{provider}'")
+            if not os.getenv("LLM_MODEL"):
+                errors.append(f"❌ LLM_MODEL is required for custom provider '{provider}'")
+        
+        return (len(errors) == 0, errors)
+    
+    @staticmethod
+    def print_llm_config():
+        """Print current LLM configuration."""
+        provider = os.getenv("LLM_PROVIDER", "openai")
+        model = os.getenv("LLM_MODEL", SUPPORTED_PROVIDERS.get(provider, {}).get("model", "unknown"))
+        base_url = os.getenv("LLM_BASE_URL", SUPPORTED_PROVIDERS.get(provider, {}).get("base_url", "custom"))
+        
+        print(f"  🤖 LLM Configuration:")
+        print(f"     Provider: {provider}")
+        print(f"     Model:    {model}")
+        print(f"     Base URL: {base_url}")
     
     def _run_module(self, module_name: str, args: list, timeout: int = 300) -> dict:
         """Generic module runner (uses python -m pipeline.frontend.xxx)."""
@@ -241,13 +292,27 @@ class FrontendRunner:
     def run_ui_generator(self, spec_machine: str, context_file: str, force_design: bool) -> dict:
         """Runs the UI Generator to create UI specs from the state machine."""
         ui_output_dir = os.path.join(OUTPUT_DIR, "ui_specs")
+        spec_output = os.path.join(OUTPUT_DIR, "spec", "spec.md")
         cmd = [
             "--machine", spec_machine,
             "--context", context_file,
+            "--spec", spec_output,
             "--output-dir", ui_output_dir
         ]
         if force_design:
             cmd.append("--force-design")
+        
+        # Detect provider from environment
+        provider = os.environ.get("LLM_PROVIDER", "")
+        model = os.environ.get("LLM_MODEL", "")
+        base_url = os.environ.get("LLM_BASE_URL", "")
+        
+        if provider:
+            cmd.extend(["--provider", provider])
+        if model:
+            cmd.extend(["--model", model])
+        if base_url:
+            cmd.extend(["--base-url", base_url])
         
         try:
             env = os.environ.copy()
@@ -256,7 +321,7 @@ class FrontendRunner:
                 ["python3", "-m", "pipeline.ui_generator"] + cmd,
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=600,
                 env=env,
                 cwd=PROJECT_ROOT
             )

@@ -42,7 +42,7 @@ LLM_CONFIG = {
 }
 
 # Default provider
-DEFAULT_PROVIDER = "openai"
+DEFAULT_PROVIDER = "dashscope"
 
 # ---------------------------------------------------------------------------
 # Loop Configuration

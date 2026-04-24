@@ -34,8 +34,102 @@ import argparse
 # Add src/ to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
+# ---------------------------------------------------------------------------
+# Interactive LLM configuration
+# ---------------------------------------------------------------------------
+
+SUPPORTED_PROVIDERS = {
+    "1": {"name": "openai", "model": "gpt-4o", "base_url": "https://api.openai.com/v1"},
+    "2": {"name": "anthropic", "model": "claude-3-5-sonnet-20241022", "base_url": "https://api.anthropic.com"},
+    "3": {"name": "google", "model": "gemini-2.5-flash", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai"},
+    "4": {"name": "dashscope", "model": "qwen-max", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+    "5": {"name": "coding", "model": "qwen3.5-plus", "base_url": "https://coding-intl.dashscope.aliyuncs.com/v1"},
+}
+
+
+def prompt_llm_config():
+    """Interactively prompt for LLM configuration if not set.
+    
+    Sets environment variables for the current process.
+    Returns True if configuration is complete, False if user aborts.
+    """
+    # Check what's already set
+    api_key = os.getenv("LLM_API_KEY", "")
+    provider = os.getenv("LLM_PROVIDER", "")
+    model = os.getenv("LLM_MODEL", "")
+    base_url = os.getenv("LLM_BASE_URL", "")
+    
+    needs_config = not api_key or not provider
+    
+    if not needs_config:
+        return True
+    
+    print()
+    print("=" * 60)
+    print("🤖 LLM CONFIGURATION")
+    print("=" * 60)
+    print()
+    print("This system requires an LLM API key to function.")
+    print("Supported providers: OpenAI, Anthropic, Google Gemini, DashScope (Alibaba)")
+    print()
+    
+    # Prompt for API key
+    if not api_key:
+        api_key = input("  🔑 LLM API Key: ").strip()
+        if not api_key:
+            print("\n❌ API key is required. Aborting.")
+            return False
+        os.environ["LLM_API_KEY"] = api_key
+    
+    # Prompt for provider
+    if not provider:
+        print()
+        print("  Select LLM Provider:")
+        for num, info in SUPPORTED_PROVIDERS.items():
+            print(f"    [{num}] {info['name'].title()} (default model: {info['model']})")
+        print(f"    [6] Custom provider")
+        print()
+        
+        choice = input("  Your choice [1-6]: ").strip()
+        
+        if choice in SUPPORTED_PROVIDERS:
+            info = SUPPORTED_PROVIDERS[choice]
+            provider = info["name"]
+            base_url = info["base_url"]
+            model = info["model"]
+            os.environ["LLM_PROVIDER"] = provider
+            os.environ["LLM_BASE_URL"] = base_url
+            os.environ["LLM_MODEL"] = model
+        elif choice == "6":
+            provider = input("  Provider name: ").strip().lower()
+            base_url = input("  Base URL: ").strip()
+            model = input("  Model name: ").strip()
+            if not provider or not base_url or not model:
+                print("\n❌ All fields are required for custom provider. Aborting.")
+                return False
+            os.environ["LLM_PROVIDER"] = provider
+            os.environ["LLM_BASE_URL"] = base_url
+            os.environ["LLM_MODEL"] = model
+        else:
+            print(f"\n❌ Invalid choice '{choice}'. Aborting.")
+            return False
+    
+    # Summary
+    print()
+    print("  ✅ Configuration saved for this session:")
+    print(f"     Provider: {os.getenv('LLM_PROVIDER')}")
+    print(f"     Model:    {os.getenv('LLM_MODEL')}")
+    print(f"     Base URL: {os.getenv('LLM_BASE_URL')}")
+    print()
+    
+    return True
+
 
 def main():
+    # Interactive LLM configuration (if needed)
+    if not prompt_llm_config():
+        sys.exit(1)
+    
     parser = argparse.ArgumentParser(
         description="Autoresearch - Automatic Functional Analysis System",
         formatter_class=argparse.RawDescriptionHelpFormatter,
