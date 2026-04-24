@@ -21,35 +21,107 @@ The idea is inspired by Andrej Karpathy's [autoresearch](https://github.com/karp
 # 1. Install dependencies
 pip install -r requirements.txt
 
-# 2. Configure LLM (REQUIRED)
+# 2. Run the autonomous loop (LLM credentials will be prompted if not set)
+python3 run.py loop-frontend --input-dir inputs/ --max-iterations 5 --time-budget 600 --generate-ui
+```
+
+### Interactive LLM Configuration
+
+When you run `run.py`, if `LLM_API_KEY` or `LLM_PROVIDER` are not set, you'll be prompted to configure them:
+
+```
+============================================================
+🤖 LLM CONFIGURATION
+============================================================
+
+This system requires an LLM API key to function.
+Supported providers: OpenAI, Anthropic, Google Gemini, DashScope (Alibaba)
+
+  🔑 LLM API Key: sk-...
+
+  Select LLM Provider:
+    [1] Openai (default model: gpt-4o)
+    [2] Anthropic (default model: claude-3-5-sonnet-20241022)
+    [3] Google (default model: gemini-2.5-flash)
+    [4] Dashscope (default model: qwen-max)
+    [5] Coding (default model: qwen3.5-plus)
+    [6] Custom provider
+
+  Your choice [1-6]: 1
+
+  ✅ Configuration saved for this session:
+     Provider: openai
+     Model:    gpt-4o
+     Base URL: https://api.openai.com/v1
+```
+
+### Or Set Environment Variables Manually
+
+```bash
 export LLM_API_KEY="your-key"
-export LLM_PROVIDER="openai"  # or anthropic, google, dashscope
+export LLM_PROVIDER="openai"  # or anthropic, google, dashscope, coding
+```
 
-# 3. Put your inputs in inputs/
-cp your_files.txt inputs/
+## Running All Pipelines
 
-# 4. Run the autonomous loop (with automatic ingest)
-python run.py loop --input-dir inputs/ --max-iterations 10 --force
+The system has **three independent pipelines**: Frontend, Backend, and CI/CD.
+
+```bash
+# Set LLM credentials (or let run.py prompt you)
+export LLM_API_KEY="sk-..."
+export LLM_PROVIDER="coding"
+export LLM_MODEL="qwen3.5-plus"
+export LLM_BASE_URL="https://coding-intl.dashscope.aliyuncs.com/v1"
+
+# 1. Frontend pipeline (iterative loop)
+python3 run.py loop-frontend --input-dir inputs/ --max-iterations 5 --time-budget 600 --generate-ui
+
+# 2. Backend pipeline
+python3 run.py backend
+python3 run.py backend-critic
+
+# 3. CI/CD pipeline
+python3 run.py ci-cd
+```
+
+### One-Liner (All Pipelines)
+
+```bash
+LLM_API_KEY="sk-..." LLM_PROVIDER="coding" LLM_MODEL="qwen3.5-plus" LLM_BASE_URL="https://coding-intl.dashscope.aliyuncs.com/v1" \
+python3 run.py loop-frontend --input-dir inputs/ --max-iterations 5 --time-budget 600 --generate-ui \
+&& python3 run.py backend \
+&& python3 run.py backend-critic \
+&& python3 run.py ci-cd
 ```
 
 ### Execution Modes
 
 ```bash
-# Mode 1: Complete loop with automatic ingest
-python run.py loop --input-dir inputs/ --max-iterations 10
+# Mode 1: Complete frontend loop with automatic ingest
+python3 run.py loop-frontend --input-dir inputs/ --max-iterations 5 --time-budget 600
 
 # Mode 2: Loop without ingest (context already exists)
-python run.py loop --context output/project_context.md --max-iterations 10
+python3 run.py loop-frontend --context output/context/project_context.md --max-iterations 5
 
 # Mode 3: Ingest only
-python run.py ingest --input-dir inputs/
+python3 run.py ingest --input-dir inputs/
 
-# Mode 4: Individual steps
-python run.py analyst --context output/project_context.md
-python run.py spec --context output/project_context.md
-python run.py validator --machine output/spec/spec_machine.json
-python run.py fuzzer --machine output/spec_machine.json
-python run.py critic --fuzz-report output/fuzz_report.json
+# Mode 4: Individual frontend steps
+python3 run.py frontend-analyst --context output/context/project_context.md
+python3 run.py frontend-spec --context output/context/project_context.md
+python3 run.py frontend-validator --machine output/spec/spec_machine.json
+python3 run.py frontend-fuzzer --machine output/spec/spec_machine.json
+python3 run.py frontend-critic --fuzz-report output/spec/fuzz_report.json
+
+# Mode 5: Backend pipeline
+python3 run.py backend --machine output/spec/spec_machine.json --context output/context/project_context.md
+python3 run.py backend-critic --backend-spec output/backend/backend_spec.md --spec output/spec/spec.md --machine output/spec/spec_machine.json
+
+# Mode 6: CI/CD pipeline
+python3 run.py ci-cd --spec output/spec/spec.md --backend-spec output/backend/backend_spec.md
+
+# Mode 7: UI Generator
+python3 run.py ui-generator --machine output/spec/spec_machine.json --context output/context/project_context.md
 ```
 
 ## Project Structure
@@ -64,22 +136,55 @@ autoresearch/
 │   │   └── analyst_suggestions.json  # LLM analysis
 │   ├── spec/
 │   │   ├── spec.md              # Functional specification with PlantUML
-│   │   └── spec_machine.json    # XState state machine
-│   ├── fuzzer_report.json   # Fuzzer report
-│   └── critic_feedback.json # Critic feedback
+│   │   ├── spec_machine.json    # XState state machine
+│   │   ├── fuzz_report.json     # Fuzzer report
+│   │   └── critic_report.json   # Critic feedback
+│   ├── backend/
+│   │   ├── backend_spec.md      # Backend functional specification
+│   │   └── critic_report.json   # Backend critic report
+│   ├── ci_cd/
+│   │   └── ci_cd_spec.md        # CI/CD functional specification
+│   ├── ui_specs/                # UI specifications for AI generators
+│   │   ├── DESIGN.md            # Design system
+│   │   ├── README.md            # Index with PlantUML diagram
+│   │   ├── screens/             # Real screens (ready for v0/Claude)
+│   │   └── states/              # Machine states (reference)
+│   └── loop_checkpoints/        # Loop iteration checkpoints
+│       ├── checkpoint_iter_001.json
+│       └── final_report.json
 ├── src/
-│   ├── config.py          # Multi-provider LLM configuration
-│   ├── rules.py           # Structural rules (WHAT must be there)
-│   ├── ingest.py          # Extracts context from inputs
-│   ├── analyst.py         # Analyzes and generates states/transitions
-│   ├── spec.py            # Generates specification with PlantUML + XState
-│   ├── validator.py       # Validates state machine
-│   ├── fuzzer.py          # Tests state machine
-│   ├── critic.py          # Hostile reviewer (edge cases)
-│   ├── ui_generator.py    # Generates UI specs for AI generators
-│   └── loop.py            # Autonomous loop
-├── run.py                 # Main entry point
-└── requirements.txt       # Python dependencies
+│   ├── config.py              # Multi-provider LLM configuration
+│   ├── loop/                  # Autonomous loop
+│   │   ├── __init__.py        # AutonomousLoop coordinator
+│   │   ├── cli.py             # CLI entry point
+│   │   ├── runner.py          # Pipeline step runners
+│   │   └── quality.py         # Quality checker
+│   ├── pipeline/              # Pipeline stages
+│   │   ├── ingest/            # Context extraction
+│   │   ├── frontend/          # Frontend analysis pipeline
+│   │   │   ├── analyst/       # State/transition analysis
+│   │   │   ├── spec/          # Specification generation
+│   │   │   ├── validator/     # State machine validation
+│   │   │   ├── fuzzer/        # Fuzz testing
+│   │   │   └── critic/        # Critical review
+│   │   ├── backend/           # Backend specification
+│   │   │   ├── architect.py   # Backend architect
+│   │   │   └── critic.py      # Backend critic
+│   │   ├── ci_cd/             # CI/CD specification
+│   │   │   └── planner.py     # CI/CD planner
+│   │   └── ui_generator/      # UI spec generation
+│   ├── state_machine/         # XState machine building
+│   │   ├── builder.py         # Machine builder with action formatting
+│   │   ├── post_processing.py # Post-processing (dedup, cleanup)
+│   │   └── validation.py      # State machine validation
+│   ├── diagrams/              # Diagram generation
+│   │   ├── plantuml.py        # PlantUML statechart & sequence
+│   │   └── markdown.py        # Markdown spec generation
+│   └── llm/                   # LLM client
+│       ├── client.py          # Shared LLM client wrapper
+│       └── prompts.py         # LLM prompt templates
+├── run.py                     # Main entry point (with interactive LLM config)
+└── requirements.txt           # Python dependencies
 ```
 
 ## LLM Configuration
@@ -89,7 +194,7 @@ The system supports multiple LLM providers. Configure with environment variables
 | Variable | Description | Example |
 |-----------|-------------|---------|
 | `LLM_API_KEY` | API Key (REQUIRED) | `sk-...` |
-| `LLM_PROVIDER` | Provider to use | `openai`, `anthropic`, `google`, `dashscope` |
+| `LLM_PROVIDER` | Provider to use | `openai`, `anthropic`, `google`, `dashscope`, `coding` |
 | `LLM_BASE_URL` | Base URL (optional, override) | `https://api.openai.com/v1` |
 | `LLM_MODEL` | Model to use (optional, override) | `gpt-4o`, `claude-3-5-sonnet-20241022` |
 
@@ -99,8 +204,9 @@ The system supports multiple LLM providers. Configure with environment variables
 |----------|----------------|-----------------|
 | OpenAI | `openai` | `gpt-4o` |
 | Anthropic | `anthropic` | `claude-3-5-sonnet-20241022` |
-| Google | `google` | `gemini-2.0-flash` |
-| DashScope (Alibaba) | `dashscope` | `qwen-plus` |
+| Google | `google` | `gemini-2.5-flash` |
+| DashScope (Alibaba) | `dashscope` | `qwen-max` |
+| Coding (DashScope Plan) | `coding` | `qwen3.5-plus` |
 
 ### Examples
 
@@ -119,6 +225,12 @@ export LLM_PROVIDER="google"
 # DashScope (Qwen)
 export LLM_API_KEY="sk-..."
 export LLM_PROVIDER="dashscope"
+
+# Coding (DashScope Plan - Qwen + third-party models)
+export LLM_API_KEY="sk-sp-..."
+export LLM_PROVIDER="coding"
+export LLM_MODEL="qwen3.5-plus"
+export LLM_BASE_URL="https://coding-intl.dashscope.aliyuncs.com/v1"
 
 # Custom provider (OpenAI-compatible)
 export LLM_API_KEY="your-key"
@@ -140,13 +252,13 @@ The system supports the [DESIGN.md](https://github.com/google-labs-code/design.m
 
 ```bash
 # Generate DESIGN.md from context (first time)
-python run.py loop --input-dir inputs/ --generate-ui
+python3 run.py loop-frontend --input-dir inputs/ --generate-ui
 
 # Use existing DESIGN.md (preserves your changes)
-python run.py loop --context output/context/project_context.md --generate-ui
+python3 run.py loop-frontend --context output/context/project_context.md --generate-ui
 
 # Force regeneration (when context changed significantly)
-python run.py loop --context output/context/project_context.md --generate-ui --force-design
+python3 run.py loop-frontend --context output/context/project_context.md --generate-ui --force-design
 ```
 
 **DESIGN.md structure:**
@@ -175,21 +287,14 @@ Design philosophy and visual guidelines...
 
 ### UI Specifications (output/ui_specs/)
 
-After generating the state machine, you can use `ui_generator.py` to create **Markdown Blueprints** ready to be used with AI UI generators:
+After generating the state machine, you can use `ui-generator` to create **Markdown Blueprints** ready to be used with AI UI generators:
 
 ```bash
 # Generate all UI specs (states + screens + README)
-python3 src/ui_generator.py
-
-# With specific provider
-python3 src/ui_generator.py --provider ollama --model llama3
-
-# States only or screens only
-python3 src/ui_generator.py --states-only
-python3 src/ui_generator.py --screens-only
+python3 run.py ui-generator --machine output/spec/spec_machine.json --context output/context/project_context.md
 
 # Force DESIGN.md regeneration
-python3 src/ui_generator.py --force-design
+python3 run.py ui-generator --machine output/spec/spec_machine.json --context output/context/project_context.md --force-design
 ```
 
 #### What it generates
@@ -258,21 +363,26 @@ The state machine is in JSON format compatible with [XState](https://xstate.js.o
 ```json
 {
   "id": "appFlow",
-  "initial": "idle",
-  "context": {"user": null, "errors": [], "retryCount": 0},
+  "initial": "app_idle",
+  "context": {"user": null, "errors": [], "retryCount": 0, "previousState": null},
   "states": {
-    "idle": {
+    "app_idle": {
       "entry": ["initializeApp"],
       "on": {
         "START": "loading"
       }
     },
     "loading": {
-      "entry": ["showLoadingIndicator"],
+      "entry": ["showLoadingIndicator", "start_timeout_timer"],
+      "exit": ["stop_timeout_timer"],
       "on": {
-        "SUCCESS": "success",
-        "ERROR": "error",
-        "TIMEOUT": "timeout"
+        "ON_SUCCESS": {
+          "target": "success",
+          "cond": "hasData",
+          "actions": [{"type": "assign", "assignment": {"retryCount": 0}}]
+        },
+        "ON_SUCCESS": "empty",
+        "ON_ERROR": "error"
       }
     }
   }
@@ -316,6 +426,13 @@ The system iterates automatically:
 4. **Fuzzer** tests the state machine
 5. **Critic** finds missing edge cases
 6. **Loop** restarts from the weak points found
+
+**Stop criteria:**
+- Quality Score 100/100 (perfect machine)
+- Quality Score ≥ 90 AND 0 critical issues (sufficient quality)
+- Convergence: Quality Score doesn't improve for 2 consecutive iterations
+- Max iterations reached
+- Timeout reached
 
 ## Requirements
 
