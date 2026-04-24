@@ -3,15 +3,10 @@ import sys
 import os
 
 # Add src to path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src')))
 
-from spec import (
-    _build_state_config, 
-    _add_transitions, 
-    _complete_missing_branches, 
-    _clean_unreachable_states,
-    _validate_no_critical_patterns
-)
+from state_machine.builder import build_state_config, add_transitions
+from state_machine.post_processing import complete_missing_branches, clean_unreachable_states, validate_no_critical_patterns
 
 def test_build_state_config_flat():
     state = {
@@ -19,7 +14,7 @@ def test_build_state_config_flat():
         "entry_actions": ["log"],
         "exit_actions": ["cleanup"]
     }
-    config = _build_state_config(state)
+    config = build_state_config(state)
     assert config["entry"] == ["log"]
     assert config["exit"] == ["cleanup"]
     assert "states" not in config
@@ -30,7 +25,7 @@ def test_build_state_config_hierarchical():
         "sub_states": ["dashboard", "catalog"],
         "initial_sub_state": "dashboard"
     }
-    config = _build_state_config(state)
+    config = build_state_config(state)
     assert config["initial"] == "dashboard"
     assert "dashboard" in config["states"]
     assert "catalog" in config["states"]
@@ -51,7 +46,7 @@ def test_add_transitions_dot_notation():
     transitions = [
         {"from_state": "success.dashboard", "to_state": "catalog", "event": "GO_TO_CATALOG"}
     ]
-    _add_transitions(machine, transitions)
+    add_transitions(machine, transitions)
     # Should resolve to the nested state and make target relative
     assert machine["states"]["success"]["states"]["dashboard"]["on"]["GO_TO_CATALOG"] == ".catalog"
 
@@ -65,7 +60,7 @@ def test_complete_missing_branches():
             }
         }
     }
-    fixed = _complete_missing_branches(machine)
+    fixed = complete_missing_branches(machine)
     transitions = fixed["states"]["loading"]["on"]["ON_SUCCESS"]
     assert len(transitions) == 2
     guards = [t.get("cond") for t in transitions]
@@ -82,7 +77,7 @@ def test_clean_unreachable_states():
             "ghost_state": {"on": {}} # Unreachable
         }
     }
-    cleaned = _clean_unreachable_states(machine)
+    cleaned = clean_unreachable_states(machine)
     assert "ghost_state" not in cleaned["states"]
     assert "app_idle" in cleaned["states"]
     assert "success" in cleaned["states"]
@@ -103,7 +98,7 @@ def test_validate_no_critical_patterns_violations():
             }
         }
     }
-    violations = _validate_no_critical_patterns(machine)
+    violations = validate_no_critical_patterns(machine)
     assert len(violations) == 3
     assert any("REGOLA 15" in v for v in violations)
     assert any("REGOLA 16" in v for v in violations)

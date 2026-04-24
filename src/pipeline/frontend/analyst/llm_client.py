@@ -1,36 +1,15 @@
 """
-Analyst LLM for automatic functional analysis.
-
-Reads the context and generates structured suggestions to expand the functional
-specification with states, transitions, and edge cases.
-
-LLM is REQUIRED - no simulated fallback.
-
-Output: Validated JSON.
-
-Usage:
-    python run.py analyst --context output/context/project_context.md --output output/analyst/analyst_suggestions.json
-    
-Environment Variables:
-    LLM_API_KEY: Your API key (REQUIRED)
-    LLM_PROVIDER: Provider (openai, anthropic, google, dashscope)
-    LLM_BASE_URL: Base API URL (optional, override)
-    LLM_MODEL: Model to use (optional, override)
+LLM client for analyst - generates functional suggestions from context.
 """
 
 import os
 import sys
 import json
-import argparse
-from datetime import datetime
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from config import LLM_CONFIG, DEFAULT_PROVIDER
 
-
-# ---------------------------------------------------------------------------
-# LLM Client
-# ---------------------------------------------------------------------------
 
 def get_llm_client():
     """Configure the LLM client."""
@@ -66,13 +45,12 @@ def call_llm(context_text: str, critic_feedback: str = None, max_retries: int = 
     # Truncate context to avoid truncated responses
     max_context = 8000  # characters
     if len(context_text) > max_context:
-        # Keep the most important sections
         lines = context_text.split("\n")
         important_lines = []
         for line in lines:
             if line.startswith("##") or line.startswith("###") or line.startswith("-") or line.startswith("|"):
                 important_lines.append(line)
-        context_text = "\n".join(important_lines[:200])  # max 200 important lines
+        context_text = "\n".join(important_lines[:200])
         if len(context_text) > max_context:
             context_text = context_text[:max_context]
     
@@ -175,7 +153,6 @@ Verification: for each state you generate, ask yourself "how does the user exit 
             
         except json.JSONDecodeError as e:
             print(f"  Attempt {attempt + 1} failed (invalid JSON): {e}")
-            # Try to extract manually
             try:
                 start = content.find("{")
                 end = content.rfind("}")
@@ -194,64 +171,3 @@ Verification: for each state you generate, ask yourself "how does the user exit 
     print("❌ ERROR: All LLM attempts failed.")
     print("   The system cannot work without an LLM.")
     sys.exit(1)
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-def main():
-    parser = argparse.ArgumentParser(description="Analyst LLM for functional analysis")
-    parser.add_argument("--context", type=str, default="output/context/project_context.md",
-                        help="Context file")
-    parser.add_argument("--output", type=str, default="output/analyst/analyst_suggestions.json",
-                        help="Output JSON file")
-    parser.add_argument("--critic-feedback", type=str, default=None,
-                        help="Critic feedback JSON file (for iterative correction)")
-    args = parser.parse_args()
-    
-    print("=" * 50)
-    print("ANALYST - Automatic Functional Analysis")
-    print("=" * 50)
-    print(f"Context: {args.context}")
-    print(f"Output: {args.output}")
-    if args.critic_feedback:
-        print(f"Critic feedback: {args.critic_feedback}")
-    print()
-    
-    # Read context
-    with open(args.context, "r", encoding="utf-8") as f:
-        context_text = f.read()
-    
-    # Read critic feedback if provided
-    critic_text = None
-    if args.critic_feedback and os.path.exists(args.critic_feedback):
-        with open(args.critic_feedback, "r", encoding="utf-8") as f:
-            critic_data = json.load(f)
-        # Extract only critical issues for the prompt
-        critical_issues = critic_data.get("critical_issues", [])
-        if critical_issues:
-            critic_text = json.dumps(critical_issues, indent=2, ensure_ascii=False)
-            print(f"  📋 Critic feedback loaded: {len(critical_issues)} critical issues")
-    
-    print(f"Context loaded: {len(context_text)} characters")
-    print("  🚀 Running with LLM...")
-    
-    # Call LLM
-    result = call_llm(context_text, critic_feedback=critic_text)
-    
-    # Write output
-    os.makedirs(os.path.dirname(args.output) if os.path.dirname(args.output) else ".", exist_ok=True)
-    with open(args.output, "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2, ensure_ascii=False)
-    
-    print(f"\n✅ Output written: {args.output}")
-    print(f"  Patterns: {len(result.get('patterns_detected', []))}")
-    print(f"  States: {len(result.get('states', []))}")
-    print(f"  Transitions: {len(result.get('transitions', []))}")
-    print(f"  Edge cases: {len(result.get('edge_cases', []))}")
-    print(f"  Events: {len(result.get('events', []))}")
-
-
-if __name__ == "__main__":
-    main()

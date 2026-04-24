@@ -3,9 +3,9 @@ import sys
 import os
 
 # Add src to path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src')))
 
-from validator import validate_machine
+from state_machine.validation import validate_machine
 
 def test_validate_dead_end():
     machine = {

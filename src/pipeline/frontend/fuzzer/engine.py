@@ -1,21 +1,9 @@
 """
-Fuzzer for XState state machine.
-
-Simulates random paths on the state machine to find:
-- Dead-end states (already covered by validator, but here we find them through execution)
-- Unreachable states
-- Infinite loops
-- Unhandled transitions
-
-Usage:
-    python src/fuzzer.py --machine output/spec/spec_machine.json
+Fuzzer engine - simulates random paths on state machines to find bugs.
 """
 
-import os
-import sys
 import json
 import random
-import argparse
 from collections import deque
 from datetime import datetime
 
@@ -114,7 +102,6 @@ def simulate_path(machine: dict, max_steps: int = 50) -> dict:
         transitions = states.get(current, {}).get("on", {})
         
         if not transitions:
-            # Dead-end: no exit transitions
             return {
                 "status": "dead_end",
                 "path": path,
@@ -122,7 +109,6 @@ def simulate_path(machine: dict, max_steps: int = 50) -> dict:
                 "steps": steps
             }
         
-        # Choose random event
         event = random.choice(list(transitions.keys()))
         target = _pick_random_target(transitions[event])
         
@@ -149,7 +135,6 @@ def simulate_path(machine: dict, max_steps: int = 50) -> dict:
         current = target
         steps += 1
     
-    # Check if we're in a loop
     if len(path) != len(set(path)):
         return {
             "status": "potential_loop",
@@ -171,7 +156,6 @@ def detect_loops(machine: dict) -> list:
     
     def dfs(state, visited, path):
         if state in visited:
-            # Loop found
             loop_start = path.index(state)
             loop = path[loop_start:] + [state]
             loops.append(loop)
@@ -199,7 +183,6 @@ def run_fuzz_test(machine: dict, num_paths: int = 100, max_steps_per_path: int =
     reachable_states = find_reachable_states(machine)
     unreachable_states = all_states - reachable_states
     
-    # Simulate random paths
     path_results = {
         "dead_ends": [],
         "invalid_transitions": [],
@@ -223,10 +206,8 @@ def run_fuzz_test(machine: dict, num_paths: int = 100, max_steps_per_path: int =
         else:
             path_results["completed_paths"] += 1
     
-    # Find structural loops
     structural_loops = detect_loops(machine)
     
-    # Calculate statistics
     total_errors = (
         len(path_results["dead_ends"]) +
         len(path_results["invalid_transitions"]) +
@@ -236,10 +217,8 @@ def run_fuzz_test(machine: dict, num_paths: int = 100, max_steps_per_path: int =
     
     total_warnings = len(path_results["potential_loops"]) + len(structural_loops)
     
-    # Bugs found (errors indicating real problems)
     bugs_found = []
     
-    # Unique dead-end states
     dead_end_states = set()
     for de in path_results["dead_ends"]:
         dead_end_states.add(de["dead_end_state"])
@@ -252,7 +231,6 @@ def run_fuzz_test(machine: dict, num_paths: int = 100, max_steps_per_path: int =
             "severity": "critical"
         })
     
-    # Unreachable states
     for state in unreachable_states:
         bugs_found.append({
             "type": "unreachable_state",
@@ -261,7 +239,6 @@ def run_fuzz_test(machine: dict, num_paths: int = 100, max_steps_per_path: int =
             "severity": "warning"
         })
     
-    # Transitions to unknown states
     for ut in path_results["unknown_targets"]:
         bugs_found.append({
             "type": "unknown_target",
@@ -296,7 +273,7 @@ def run_fuzz_test(machine: dict, num_paths: int = 100, max_steps_per_path: int =
         "summary": summary,
         "bugs": bugs_found,
         "path_details": {
-            "dead_ends": path_results["dead_ends"][:10],  # Limit output
+            "dead_ends": path_results["dead_ends"][:10],
             "invalid_transitions": path_results["invalid_transitions"][:10],
             "unknown_targets": path_results["unknown_targets"][:10],
             "potential_loops": path_results["potential_loops"][:10],
@@ -304,87 +281,3 @@ def run_fuzz_test(machine: dict, num_paths: int = 100, max_steps_per_path: int =
         "structural_loops": structural_loops[:20],
         "unreachable_states": list(unreachable_states),
     }
-
-
-def print_report(report: dict):
-    """Print a readable report."""
-    summary = report["summary"]
-    
-    print("\n" + "=" * 60)
-    print("FUZZ TEST REPORT")
-    print("=" * 60)
-    print(f"Machine ID:        {report['machine_id']}")
-    print(f"Initial state:     {report['initial_state']}")
-    print(f"Total states:      {summary['total_states']}")
-    print(f"Reachable states:  {summary['reachable_states']}")
-    print(f"Unreachable states:{summary['unreachable_states']}")
-    print()
-    print(f"Paths simulated:   {summary['total_paths_simulated']}")
-    print(f"Completed paths:   {summary['completed_paths']}")
-    print(f"Dead-end paths:    {summary['dead_end_paths']}")
-    print(f"Loop paths:        {summary['potential_loop_paths']}")
-    print()
-    print(f"Total errors:      {summary['total_errors']}")
-    print(f"Total warnings:    {summary['total_warnings']}")
-    print(f"Bugs found:        {summary['bugs_found']}")
-    print(f"Coverage:          {summary['coverage']}")
-    
-    if report["bugs"]:
-        print(f"\n🐛 BUGS FOUND ({len(report['bugs'])}):")
-        for bug in report["bugs"]:
-            severity_icon = "🔴" if bug["severity"] == "critical" else "🟡"
-            print(f"  {severity_icon} [{bug['severity'].upper()}] {bug['description']}")
-    
-    if report["unreachable_states"]:
-        print(f"\n⚠️  UNREACHABLE STATES:")
-        for state in report["unreachable_states"]:
-            print(f"  - {state}")
-    
-    if report["structural_loops"]:
-        print(f"\n🔄 STRUCTURAL LOOPS ({len(report['structural_loops'])}):")
-        for loop in report["structural_loops"][:5]:
-            print(f"  - {' -> '.join(loop)}")
-    
-    print("=" * 60)
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Fuzz test for XState state machine")
-    parser.add_argument("--machine", type=str, default="output/spec/spec_machine.json",
-                        help="XState machine JSON file")
-    parser.add_argument("--output", type=str, default="output/spec/fuzz_report.json",
-                        help="Output JSON report file (default: output/spec/fuzz_report.json)")
-    parser.add_argument("--num-paths", type=int, default=100,
-                        help="Number of random paths to simulate (default: 100)")
-    parser.add_argument("--max-steps", type=int, default=50,
-                        help="Max steps per path (default: 50)")
-    args = parser.parse_args()
-    
-    if not os.path.exists(args.machine):
-        print(f"Error: Machine file not found: {args.machine}")
-        sys.exit(1)
-    
-    machine = load_machine(args.machine)
-    
-    print(f"🔍 Fuzz test on machine '{machine.get('id', 'unknown')}'")
-    print(f"   States: {len(machine.get('states', {}))}")
-    print(f"   Paths: {args.num_paths}")
-    print(f"   Max steps: {args.max_steps}")
-    
-    report = run_fuzz_test(machine, args.num_paths, args.max_steps)
-    print_report(report)
-    
-    # Save report
-    output_file = args.output
-    os.makedirs(os.path.dirname(output_file) if os.path.dirname(output_file) else ".", exist_ok=True)
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2)
-    
-    print(f"\n📄 Report saved: {output_file}")
-    
-    # Exit code
-    sys.exit(0 if report["summary"]["bugs_found"] == 0 else 1)
-
-
-if __name__ == "__main__":
-    main()

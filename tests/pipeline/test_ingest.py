@@ -4,9 +4,10 @@ import os
 from unittest.mock import patch, mock_open
 
 # Add src to path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src')))
 
-from ingest import read_text_files, generate_context_markdown
+from pipeline.ingest.readers import read_text_files
+from pipeline.ingest.generator import generate_context_markdown
 
 def test_read_text_files():
     # Mocking file system is complex, but we can test the logic of combining texts
