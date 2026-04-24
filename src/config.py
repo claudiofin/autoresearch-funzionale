@@ -39,6 +39,11 @@ LLM_CONFIG = {
         "model": "qwen3.5-plus",
         "description": "Alibaba DashScope Coding Plan (Qwen 3.5 Plus)",
     },
+    "nvidia": {
+        "base_url": "https://integrate.api.nvidia.com/v1",
+        "model": "deepseek-ai/deepseek-v4-pro",
+        "description": "NVIDIA NIM DeepSeek v4 Pro (with reasoning)",
+    },
 }
 
 # Default provider

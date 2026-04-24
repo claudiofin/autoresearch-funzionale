@@ -80,6 +80,7 @@ class AutonomousLoop:
         self.start_time = None
         self.history = []
         self.quality_history = []
+        self.last_critical_issues = 0  # Track critical issues from last critic run
         
         # Sub-modules
         self.runner = FrontendRunner(
@@ -185,7 +186,8 @@ class AutonomousLoop:
         
         return self.quality_checker.should_continue(
             iteration=self.iteration,
-            quality_history=self.quality_history
+            quality_history=self.quality_history,
+            critical_issues=self.last_critical_issues
         )
     
     def _run_iteration(self) -> dict:
@@ -243,6 +245,9 @@ class AutonomousLoop:
         result["steps"]["critic"] = critic_result
         if critic_result.get("error"):
             result["errors"].append(f"Critic: {critic_result['error']}")
+        
+        # Track critical issues for convergence check
+        self.last_critical_issues = critic_result.get("critical_issues", 0)
         
         # Check stop criteria
         if not self.force_iterations:

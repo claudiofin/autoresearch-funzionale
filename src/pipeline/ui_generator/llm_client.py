@@ -25,7 +25,7 @@ def call_llm(prompt: str, system_prompt: str = "", max_tokens: int = 4096, confi
     if config is None:
         config = LLMConfig()
     
-    if config.provider in ("openai", "google", "dashscope"):
+    if config.provider in ("openai", "google", "dashscope", "nvidia", "coding"):
         return _call_openai_compatible(prompt, system_prompt, max_tokens, config)
     elif config.provider == "anthropic":
         return _call_anthropic(prompt, system_prompt, max_tokens, config)

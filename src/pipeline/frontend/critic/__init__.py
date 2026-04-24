@@ -137,6 +137,16 @@ def main():
     else:
         print(f"  📊 Using static critic analysis")
         report = static_critic_analysis(fuzz_report, machine)
+        # When LLM fails, add a synthetic critical issue to prevent the loop from stopping prematurely
+        # This ensures the loop continues until the LLM can provide a reliable analysis
+        report["critical_issues"].append({
+            "id": "CRIT-LLM-FAIL",
+            "category": "analysis",
+            "description": "LLM critic failed to produce valid analysis — manual review recommended",
+            "affected_states": [],
+            "severity": "high",
+            "suggestion": "Ensure LLM API key is valid and the model supports JSON output. The loop will continue until LLM analysis succeeds."
+        })
     
     # Add metadata
     report["metadata"] = {

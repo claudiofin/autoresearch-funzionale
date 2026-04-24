@@ -134,29 +134,19 @@ Respond ONLY with valid JSON (no markdown, no extra text):
     print(f"     States: {len(state_names)}")
     print(f"     Backend spec: {len(backend_spec)} chars")
     
-    response = call_llm(prompt, system_message="You are a Senior Backend Critic. Respond ONLY with valid JSON. Start with { and end with }. No markdown, no extra text.")
+    # Use exit_on_failure=False to gracefully handle LLM failures
+    response = call_llm(
+        prompt,
+        system_message="You are a Senior Backend Critic. Respond ONLY with valid JSON. Start with { and end with }. No markdown, no extra text.",
+        exit_on_failure=False
+    )
     
     # Parse and write output
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     
-    try:
-        # Extract JSON from response
-        content = response.strip()
-        if content.startswith("```json"):
-            content = content[7:]
-        if content.startswith("```"):
-            content = content[3:]
-        if content.endswith("```"):
-            content = content[:-3]
-        content = content.strip()
-        
-        start = content.find("{")
-        end = content.rfind("}")
-        if start >= 0 and end > start:
-            content = content[start:end+1]
-        
-        data = json.loads(content)
-    except json.JSONDecodeError:
+    if response is None:
+        # LLM failed — create a fallback critique with 0 issues
+        print(f"  ⚠️  LLM failed, generating fallback critique with 0 issues")
         data = {
             "summary": {
                 "total_issues": 0,
@@ -164,9 +154,12 @@ Respond ONLY with valid JSON (no markdown, no extra text):
                 "warnings": []
             },
             "checks": {},
-            "recommendations": [],
-            "raw_response": response
+            "recommendations": ["LLM critique failed — manual review recommended"],
+            "llm_failed": True
         }
+    else:
+        # response is already a parsed dict from call_llm()
+        data = response
     
     with open(output_file, "w") as f:
         json.dump(data, f, indent=2)

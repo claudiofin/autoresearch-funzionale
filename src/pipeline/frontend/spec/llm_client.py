@@ -11,6 +11,40 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from config import LLM_CONFIG, DEFAULT_PROVIDER
 
 
+def _call_llm_streaming_no_thinking(client, model: str, system_message: str, prompt: str,
+                                     temperature: float, max_tokens: int, timeout: int) -> str:
+    """Call LLM with streaming but WITHOUT thinking enabled.
+    
+    For NVIDIA NIM: thinking/reasoning can contaminate JSON output.
+    This function streams the response without enabling the thinking template.
+    """
+    print(f"  🔄 Streaming response (no thinking)...")
+    
+    response = client.chat.completions.create(
+        timeout=timeout,
+        model=model,
+        messages=[
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=temperature,
+        max_tokens=max_tokens,
+        stream=True,
+    )
+    
+    full_content = ""
+    for chunk in response:
+        if not getattr(chunk, "choices", None):
+            continue
+        if chunk.choices and chunk.choices[0].delta.content is not None:
+            content_chunk = chunk.choices[0].delta.content
+            print(content_chunk, end="", flush=True)
+            full_content += content_chunk
+    
+    print()  # newline after streaming
+    return full_content
+
+
 def call_llm_spec(
     context_text: str, 
     analyst_suggestions: dict = None, 
@@ -49,6 +83,8 @@ def call_llm_spec(
     except ImportError:
         print("❌ ERROR: openai not installed.")
         sys.exit(1)
+    
+    use_streaming = (provider == "nvidia")
     
     # Truncate context
     max_context = 4000
@@ -248,25 +284,33 @@ TRANSITION FORMAT:
 - With guard and actions: EVENT with cond guardName and actions [actionName] -> target_state
 """
     
-    print(f"  🤖 Calling LLM for spec ({model}), context: {len(context_text)} chars...")
+    print(f"  🤖 Calling LLM for spec ({model}){' [streaming]' if use_streaming else ''}, context: {len(context_text)} chars...")
     if existing_machine:
         print(f"  📦 Existing machine: {len(existing_machine.get('states', {}))} states")
     
     for attempt in range(max_retries):
         try:
             print(f"  Attempt {attempt + 1}/{max_retries}...")
-            response = client.chat.completions.create(
-                timeout=180,
-                model=model,
-                messages=[
-                    {"role": "system", "content": "You are an expert Product Manager specializing in state machines. Respond ONLY with valid JSON. Start with { and end with }. No markdown, no extra text."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                max_tokens=8192,
-            )
             
-            content = response.choices[0].message.content.strip()
+            if use_streaming:
+                # NVIDIA NIM: use streaming WITHOUT thinking to avoid JSON contamination
+                content = _call_llm_streaming_no_thinking(
+                    client, model,
+                    "You are an expert Product Manager specializing in state machines. Respond ONLY with valid JSON. Start with { and end with }. No markdown, no extra text.",
+                    prompt, 0.3, 8192, 180
+                )
+            else:
+                response = client.chat.completions.create(
+                    timeout=180,
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": "You are an expert Product Manager specializing in state machines. Respond ONLY with valid JSON. Start with { and end with }. No markdown, no extra text."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=8192,
+                )
+                content = response.choices[0].message.content.strip()
             
             # Extract JSON
             if content.startswith("```json"):

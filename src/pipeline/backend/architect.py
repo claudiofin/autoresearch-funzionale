@@ -14,7 +14,7 @@ import sys
 import json
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from llm.client import call_llm
+from llm.client import call_llm_text
 
 
 def generate_backend_spec(machine_file: str, context_file: str, output_file: str) -> dict:
@@ -164,7 +164,11 @@ Respond ONLY with valid Markdown (no code blocks, no extra text):
     print(f"     Machine: {len(machine.get('states', {}))} states")
     print(f"     Context: {len(context_text)} chars")
     
-    response = call_llm(prompt, system_message="You are a Senior Backend Architect. Generate ONLY valid Markdown. No code blocks, no extra text. Start with '# Backend Functional Specification'.")
+    response = call_llm_text(
+        prompt,
+        system_message="You are a Senior Backend Architect. Generate ONLY valid Markdown. No code blocks, no extra text. Start with '# Backend Functional Specification'.",
+        max_tokens=8192
+    )
     
     # Write output
     os.makedirs(os.path.dirname(output_file), exist_ok=True)

@@ -29,6 +29,8 @@ SUPPORTED_PROVIDERS = {
     "anthropic": {"model": "claude-3-5-sonnet-20241022", "base_url": "https://api.anthropic.com"},
     "google": {"model": "gemini-2.5-flash", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai"},
     "dashscope": {"model": "qwen-max", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+    "coding": {"model": "qwen3.5-plus", "base_url": "https://coding-intl.dashscope.aliyuncs.com/v1"},
+    "nvidia": {"model": "deepseek-ai/deepseek-v4-pro", "base_url": "https://integrate.api.nvidia.com/v1"},
 }
 
 

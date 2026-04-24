@@ -107,12 +107,24 @@ def add_transitions(machine: dict, transitions: list):
     """Add transitions with support for guards and actions.
     
     Handles dot notation for hierarchical states (e.g., success.dashboard).
+    Validates transition format and skips invalid entries.
     
     Args:
         machine: The state machine dict to modify.
         transitions: List of transition dicts from LLM.
     """
-    for trans in transitions:
+    for i, trans in enumerate(transitions):
+        # Validate required fields — skip invalid transitions
+        if "from_state" not in trans:
+            print(f"  ⚠️  Skipping transition #{i}: missing 'from_state' — {trans}")
+            continue
+        if "to_state" not in trans:
+            print(f"  ⚠️  Skipping transition #{i}: missing 'to_state' — {trans}")
+            continue
+        if "event" not in trans:
+            print(f"  ⚠️  Skipping transition #{i}: missing 'event' — {trans}")
+            continue
+        
         from_state = trans["from_state"]
         to_state = trans["to_state"]
         event = trans["event"]

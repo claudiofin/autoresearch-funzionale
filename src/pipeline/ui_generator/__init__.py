@@ -56,7 +56,7 @@ def main():
     parser.add_argument("--context", default="output/context/project_context.md", help="Path to project_context.md")
     parser.add_argument("--spec", default="output/spec/spec.md", help="Path to spec.md")
     parser.add_argument("--output-dir", default="output/ui_specs", help="Output directory")
-    parser.add_argument("--provider", choices=["openai", "anthropic", "google", "ollama", "dashscope"], default="", help="LLM Provider")
+    parser.add_argument("--provider", choices=["openai", "anthropic", "google", "ollama", "dashscope", "coding", "nvidia"], default="", help="LLM Provider")
     parser.add_argument("--model", default="", help="LLM Model")
     parser.add_argument("--api-key", default="", help="LLM API Key")
     parser.add_argument("--base-url", default="", help="LLM Base URL")

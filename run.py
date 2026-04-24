@@ -230,9 +230,9 @@ Examples:
     if args.command == "loop-frontend":
         from loop.cli import main as loop_main  # type: ignore
         sys.argv = ["loop",
-                     "--context", args.context,
-                     "--max-iterations", str(args.max_iterations),
-                     "--time-budget", str(args.time_budget)]
+                      "--context", args.context,
+                      "--max-iterations", str(args.max_iterations),
+                      "--time-budget", str(args.time_budget)]
         if args.force:
             sys.argv.append("--force")
         if args.input_dir:
@@ -242,6 +242,37 @@ Examples:
         if args.generate_ui:
             sys.argv.append("--generate-ui")
         loop_main()
+        
+        # Verify that required output files exist before allowing chained commands (&&) to proceed
+        spec_machine_path = args.context.replace("/context/project_context.md", "/spec/spec_machine.json")
+        spec_path = args.context.replace("/context/project_context.md", "/spec/spec.md")
+        
+        missing_files = []
+        if not os.path.exists(spec_machine_path):
+            missing_files.append(spec_machine_path)
+        if not os.path.exists(spec_path):
+            missing_files.append(spec_path)
+        
+        if missing_files:
+            print()
+            print("=" * 60)
+            print("⚠️  WARNING: Frontend loop completed but output files are missing")
+            print("=" * 60)
+            print()
+            print("Missing files:")
+            for f in missing_files:
+                print(f"  ❌ {f}")
+            print()
+            print("This usually means the loop failed or didn't complete the spec generation phase.")
+            print("Backend and CI/CD pipelines require these files to run.")
+            print()
+            print("To fix:")
+            print("  1. Check the loop output above for errors")
+            print("  2. Re-run with more iterations: --max-iterations 10")
+            print("  3. Or run individual steps manually:")
+            print(f"     python3 run.py frontend-spec --context {args.context}")
+            print()
+            sys.exit(1)
 
     # ─── BACKEND ───
     elif args.command == "backend":

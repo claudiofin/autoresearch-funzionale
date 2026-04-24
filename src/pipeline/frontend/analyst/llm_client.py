@@ -38,9 +38,46 @@ def get_llm_client():
         sys.exit(1)
 
 
+def _call_llm_streaming_no_thinking(client, model: str, system_message: str, prompt: str,
+                                     temperature: float, max_tokens: int, timeout: int) -> str:
+    """Call LLM with streaming but WITHOUT thinking enabled.
+    
+    For NVIDIA NIM: thinking/reasoning can contaminate JSON output.
+    This function streams the response without enabling the thinking template.
+    """
+    print(f"  🔄 Streaming response (no thinking)...")
+    
+    response = client.chat.completions.create(
+        timeout=timeout,
+        model=model,
+        messages=[
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=temperature,
+        max_tokens=max_tokens,
+        stream=True,
+    )
+    
+    full_content = ""
+    for chunk in response:
+        if not getattr(chunk, "choices", None):
+            continue
+        if chunk.choices and chunk.choices[0].delta.content is not None:
+            content_chunk = chunk.choices[0].delta.content
+            print(content_chunk, end="", flush=True)
+            full_content += content_chunk
+    
+    print()  # newline after streaming
+    return full_content
+
+
 def call_llm(context_text: str, critic_feedback: str = None, max_retries: int = 3) -> dict:
     """Call the LLM to analyze the context and generate suggestions."""
     client, model = get_llm_client()
+    
+    provider = os.getenv("LLM_PROVIDER", DEFAULT_PROVIDER)
+    use_streaming = (provider == "nvidia")
     
     # Truncate context to avoid truncated responses
     max_context = 8000  # characters
@@ -114,23 +151,31 @@ Every state MUST have at least one exit transition (except the final success sta
 Verification: for each state you generate, ask yourself "how does the user exit this state?" and add the corresponding transition.
 """
     
-    print(f"  🤖 Calling LLM ({model}), context: {len(context_text)} chars...")
+    print(f"  🤖 Calling LLM ({model}){' [streaming]' if use_streaming else ''}, context: {len(context_text)} chars...")
     
     for attempt in range(max_retries):
         try:
             print(f"  Attempt {attempt + 1}/{max_retries}...")
-            response = client.chat.completions.create(
-                timeout=180,
-                model=model,
-                messages=[
-                    {"role": "system", "content": "You are a Senior Product Manager. Respond ONLY with valid JSON. Start with { and end with }. No markdown, no extra text."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                max_tokens=4096,
-            )
             
-            content = response.choices[0].message.content.strip()
+            if use_streaming:
+                # NVIDIA NIM: use streaming WITHOUT thinking to avoid JSON contamination
+                content = _call_llm_streaming_no_thinking(
+                    client, model,
+                    "You are a Senior Product Manager. Respond ONLY with valid JSON. Start with { and end with }. No markdown, no extra text.",
+                    prompt, 0.3, 4096, 180
+                )
+            else:
+                response = client.chat.completions.create(
+                    timeout=180,
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": "You are a Senior Product Manager. Respond ONLY with valid JSON. Start with { and end with }. No markdown, no extra text."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=4096,
+                )
+                content = response.choices[0].message.content.strip()
             
             # Extract JSON from any markdown
             if content.startswith("```json"):
