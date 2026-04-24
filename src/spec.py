@@ -769,77 +769,77 @@ def run_analysis(context_file: str, output_file: str, time_budget: int,
         print("   The system cannot work without an LLM.")
         sys.exit(1)
     
-    # ----- Helper: build a state config (flat or hierarchical) -----
-    def _build_state_config(state: dict) -> dict:
-        """Build XState state config from LLM state dict.
-        
-        Supports hierarchical states: if 'sub_states' is present and non-empty,
-        creates nested states with an 'initial' sub-state and navigation events.
-        """
-        config = {
-            "entry": state.get("entry_actions", []),
-            "exit": state.get("exit_actions", []),
-            "on": {}
-        }
-        
-        sub_states = state.get("sub_states", [])
-        if sub_states:
-            initial_sub = state.get("initial_sub_state") or sub_states[0]
-            config["initial"] = initial_sub
-            config["states"] = {}
-            for sub in sub_states:
-                sub_name = sub if isinstance(sub, str) else sub.get("name", "")
-                sub_entry = [] if isinstance(sub, str) else sub.get("entry_actions", [])
-                sub_exit = [] if isinstance(sub, str) else sub.get("exit_actions", [])
-                config["states"][sub_name] = {
-                    "entry": sub_entry,
-                    "exit": sub_exit,
-                    "on": {}
-                }
-            # Auto-generate NAVIGATE events between sub-states
-            for sub in sub_states:
-                sub_name = sub if isinstance(sub, str) else sub.get("name", "")
-                nav_event = f"NAVIGATE_{sub_name.upper()}"
-                for other_sub in sub_states:
-                    other_name = other_sub if isinstance(other_sub, str) else other_sub.get("name", "")
-                    if other_name != sub_name:
-                        config["states"][other_name]["on"][nav_event] = f".{sub_name}"
-        
-        return config
+# ----- Helper: build a state config (flat or hierarchical) -----
+def _build_state_config(state: dict) -> dict:
+    """Build XState state config from LLM state dict.
     
-    # ----- Helper: add transitions to machine -----
-    def _add_transitions(machine: dict, transitions: list):
-        """Add transitions with support for guards and actions."""
-        for trans in transitions:
-            from_state = trans["from_state"]
-            to_state = trans["to_state"]
-            event = trans["event"]
-            guard = trans.get("guard") or trans.get("cond")
-            actions = trans.get("actions", [])
-            
-            # Resolve dot notation (e.g., success.dashboard -> parent='success', child='dashboard')
-            target_dict = machine["states"]
-            resolved_from = from_state
-            if "." in from_state:
-                parts = from_state.split(".")
-                parent = parts[0]
-                child = parts[1]
-                if parent in machine["states"] and "states" in machine["states"][parent] and child in machine["states"][parent]["states"]:
-                    target_dict = machine["states"][parent]["states"]
-                    resolved_from = child
-                    if not to_state.startswith("."): # Make destination relative if not already
-                         to_state = f".{to_state}" if not "." in to_state else to_state
-            
-            if resolved_from in target_dict:
-                if guard or actions:
-                    transition = {"target": to_state}
-                    if guard:
-                        transition["cond"] = guard
-                    if actions:
-                        transition["actions"] = actions
-                    target_dict[resolved_from]["on"][event] = transition
-                else:
-                    target_dict[resolved_from]["on"][event] = to_state
+    Supports hierarchical states: if 'sub_states' is present and non-empty,
+    creates nested states with an 'initial' sub-state and navigation events.
+    """
+    config = {
+        "entry": state.get("entry_actions", []),
+        "exit": state.get("exit_actions", []),
+        "on": {}
+    }
+    
+    sub_states = state.get("sub_states", [])
+    if sub_states:
+        initial_sub = state.get("initial_sub_state") or sub_states[0]
+        config["initial"] = initial_sub
+        config["states"] = {}
+        for sub in sub_states:
+            sub_name = sub if isinstance(sub, str) else sub.get("name", "")
+            sub_entry = [] if isinstance(sub, str) else sub.get("entry_actions", [])
+            sub_exit = [] if isinstance(sub, str) else sub.get("exit_actions", [])
+            config["states"][sub_name] = {
+                "entry": sub_entry,
+                "exit": sub_exit,
+                "on": {}
+            }
+        # Auto-generate NAVIGATE events between sub-states
+        for sub in sub_states:
+            sub_name = sub if isinstance(sub, str) else sub.get("name", "")
+            nav_event = f"NAVIGATE_{sub_name.upper()}"
+            for other_sub in sub_states:
+                other_name = other_sub if isinstance(other_sub, str) else other_sub.get("name", "")
+                if other_name != sub_name:
+                    config["states"][other_name]["on"][nav_event] = f".{sub_name}"
+    
+    return config
+
+# ----- Helper: add transitions to machine -----
+def _add_transitions(machine: dict, transitions: list):
+    """Add transitions with support for guards and actions."""
+    for trans in transitions:
+        from_state = trans["from_state"]
+        to_state = trans["to_state"]
+        event = trans["event"]
+        guard = trans.get("guard") or trans.get("cond")
+        actions = trans.get("actions", [])
+        
+        # Resolve dot notation (e.g., success.dashboard -> parent='success', child='dashboard')
+        target_dict = machine["states"]
+        resolved_from = from_state
+        if "." in from_state:
+            parts = from_state.split(".")
+            parent = parts[0]
+            child = parts[1]
+            if parent in machine["states"] and "states" in machine["states"][parent] and child in machine["states"][parent]["states"]:
+                target_dict = machine["states"][parent]["states"]
+                resolved_from = child
+                if not to_state.startswith("."): # Make destination relative if not already
+                     to_state = f".{to_state}" if not "." in to_state else to_state
+        
+        if resolved_from in target_dict:
+            if guard or actions:
+                transition = {"target": to_state}
+                if guard:
+                    transition["cond"] = guard
+                if actions:
+                    transition["actions"] = actions
+                target_dict[resolved_from]["on"][event] = transition
+            else:
+                target_dict[resolved_from]["on"][event] = to_state
     
     # Merge with existing machine (if any)
     if existing_machine:
