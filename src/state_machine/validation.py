@@ -174,9 +174,15 @@ def find_potential_infinite_loops(machine: dict) -> list:
     return loops
 
 
-def validate_machine(machine_file: str) -> dict:
-    """Run all validations on the state machine."""
-    machine = load_machine(machine_file)
+def validate_machine(machine_file) -> dict:
+    """Run all validations on the state machine.
+    
+    Accepts either a file path (str) or a machine dict directly.
+    """
+    if isinstance(machine_file, dict):
+        machine = machine_file
+    else:
+        machine = load_machine(machine_file)
     
     results = {
         "machine_id": machine.get("id", "unknown"),

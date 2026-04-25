@@ -31,7 +31,7 @@ def test_validate_unreachable():
     }
     results = validate_machine(machine)
     assert results["unreachable_count"] == 1
-    assert results["unreachable_states"][0] == "b"
+    assert results["unreachable_states"][0]["state"] == "b"
 
 def test_validate_quality_score_perfect():
     machine = {

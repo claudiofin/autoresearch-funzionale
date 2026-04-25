@@ -1,7 +1,20 @@
 """Tests for diagrams/markdown.py"""
 
 import pytest
-from diagrams.markdown import generate_markdown_spec
+from diagrams.markdown import generate_spec_markdown as generate_markdown_spec
+
+
+def _make_llm_data():
+    return {
+        "edge_cases": [],
+        "flows": [],
+        "error_handling": [],
+        "api_contracts": [],
+    }
+
+
+def _make_diagrams():
+    return "@startuml\n@enduml", "@startuml\n@enduml"
 
 
 class TestGenerateMarkdownSpec:
@@ -16,7 +29,8 @@ class TestGenerateMarkdownSpec:
                 "error": {"entry": ["show_error"], "exit": [], "on": {"RETRY": "loading"}},
             },
         }
-        result = generate_markdown_spec(machine)
+        statechart, sequence = _make_diagrams()
+        result = generate_markdown_spec(machine, _make_llm_data(), statechart, sequence)
         assert isinstance(result, str)
         assert len(result) > 0
 
@@ -30,7 +44,8 @@ class TestGenerateMarkdownSpec:
                 "success": {"entry": [], "exit": [], "on": {}},
             },
         }
-        result = generate_markdown_spec(machine)
+        statechart, sequence = _make_diagrams()
+        result = generate_markdown_spec(machine, _make_llm_data(), statechart, sequence)
         assert "idle" in result
         assert "loading" in result
         assert "success" in result
@@ -45,7 +60,8 @@ class TestGenerateMarkdownSpec:
                 "success": {"entry": [], "exit": [], "on": {}},
             },
         }
-        result = generate_markdown_spec(machine)
+        statechart, sequence = _make_diagrams()
+        result = generate_markdown_spec(machine, _make_llm_data(), statechart, sequence)
         assert "START" in result
         assert "SUCCESS" in result
 
@@ -57,7 +73,8 @@ class TestGenerateMarkdownSpec:
                 "loading": {"entry": ["show_spinner", "fetch_data"], "exit": [], "on": {}},
             },
         }
-        result = generate_markdown_spec(machine)
+        statechart, sequence = _make_diagrams()
+        result = generate_markdown_spec(machine, _make_llm_data(), statechart, sequence)
         assert "show_spinner" in result
         assert "fetch_data" in result
 
@@ -77,7 +94,8 @@ class TestGenerateMarkdownSpec:
                 },
             },
         }
-        result = generate_markdown_spec(machine)
+        statechart, sequence = _make_diagrams()
+        result = generate_markdown_spec(machine, _make_llm_data(), statechart, sequence)
         assert "loading" in result
         assert "ready" in result
         assert "show_shimmer" in result
@@ -85,5 +103,6 @@ class TestGenerateMarkdownSpec:
 
     def test_empty_machine(self):
         machine = {"id": "empty", "initial": "idle", "states": {"idle": {"entry": [], "exit": [], "on": {}}}}
-        result = generate_markdown_spec(machine)
+        statechart, sequence = _make_diagrams()
+        result = generate_markdown_spec(machine, _make_llm_data(), statechart, sequence)
         assert isinstance(result, str)

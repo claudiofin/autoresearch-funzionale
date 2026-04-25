@@ -196,22 +196,35 @@ def clean_unreachable_states(machine: dict) -> dict:
     
     Supports both flat and parallel architectures.
     
+    For parallel architecture, ALL top-level navigation states are considered
+    "potentially reachable" since they represent app screens that can be reached
+    via events from other parts of the application. Only XState keywords are removed.
+    
     Args:
         machine: The state machine dict to clean.
     
     Returns:
         Cleaned machine dict.
     """
-    # For parallel architecture, get initial from navigation branch
-    if machine.get("type") == "parallel" and "navigation" in machine.get("states", {}):
-        initial_state = machine["states"]["navigation"].get("initial", "app_idle")
-        all_states = machine["states"]["navigation"].get("states", {})
-    else:
-        initial_state = machine.get("initial", "app_idle")
-        all_states = machine.get("states", {})
-    
     # XState reserved keywords that should never be state names
     XSTATE_KEYWORDS = {"initial", "states", "on", "entry", "exit", "context", "id", "type", "invoke", "activities"}
+    
+    # For parallel architecture, only clean XState keywords from navigation branch
+    # Don't remove "unreachable" states since all navigation states are valid screens
+    if machine.get("type") == "parallel" and "navigation" in machine.get("states", {}):
+        nav_states = machine["states"]["navigation"].get("states", {})
+        
+        # Only remove XState keyword states
+        for keyword in XSTATE_KEYWORDS:
+            if keyword in nav_states:
+                print(f"  🧹 Removing XState keyword state: '{keyword}'")
+                del nav_states[keyword]
+        
+        return machine
+    
+    # For flat architecture, do full unreachable detection
+    initial_state = machine.get("initial", "app_idle")
+    all_states = machine.get("states", {})
     
     # Remove XState keyword states
     for keyword in XSTATE_KEYWORDS:

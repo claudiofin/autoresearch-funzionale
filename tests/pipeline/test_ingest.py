@@ -16,11 +16,11 @@ def test_read_text_files():
 
 def test_generate_context_markdown():
     texts = [
-        {"filename": "a.txt", "content": "Hello world"},
-        {"filename": "b.txt", "content": "Lore ipsum"}
+        {"filename": "a.txt", "content": "Hello world", "type": "text"},
+        {"filename": "b.txt", "content": "Lore ipsum", "type": "text"}
     ]
     # No need to mock open if we just test the string generation
     content = generate_context_markdown(texts, [], [], [], [])
-    assert "# Project Analysis Context" in content
+    assert "# Project Context" in content
     assert "a.txt" in content
     assert "Hello world" in content

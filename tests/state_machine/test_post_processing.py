@@ -205,7 +205,9 @@ class TestCleanUnreachableStates:
         assert "initial" not in result["states"]
         assert "states" not in result["states"]
 
-    def test_parallel_architecture(self):
+    def test_parallel_architecture_keeps_all_states(self):
+        """For parallel architecture, all navigation states are kept (they're valid screens).
+        Only XState keywords are removed."""
         machine = {
             "type": "parallel",
             "states": {
@@ -214,7 +216,8 @@ class TestCleanUnreachableStates:
                     "states": {
                         "app_idle": {"on": {"START": "loading"}},
                         "loading": {"on": {}},
-                        "orphan": {"on": {}},  # unreachable
+                        "orphan": {"on": {}},  # would be unreachable in flat, but kept in parallel
+                        "initial": {"on": {}},  # XState keyword - should be removed
                     },
                 },
                 "active_workflows": {"initial": "none", "states": {"none": {}}},
@@ -222,8 +225,12 @@ class TestCleanUnreachableStates:
         }
         result = clean_unreachable_states(machine)
         nav = result["states"]["navigation"]["states"]
-        assert "orphan" not in nav
+        # In parallel mode, all states are kept (including orphan)
+        assert "orphan" in nav
         assert "app_idle" in nav
+        assert "loading" in nav
+        # Only XState keywords are removed
+        assert "initial" not in nav
 
 
 class TestCreateMissingTargetStates:

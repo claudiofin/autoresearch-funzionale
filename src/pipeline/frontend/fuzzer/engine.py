@@ -14,18 +14,35 @@ def load_machine(machine_file: str) -> dict:
         return json.load(f)
 
 
+def _get_navigation_states(machine: dict) -> dict:
+    """Get states dict, handling both flat and parallel architectures."""
+    if machine.get("type") == "parallel" and "navigation" in machine.get("states", {}):
+        return machine["states"]["navigation"].get("states", {})
+    return machine.get("states", {})
+
+
 def get_all_events(machine: dict) -> set:
     """Extract all possible events from the machine."""
     events = set()
-    for state_config in machine.get("states", {}).values():
+    states = _get_navigation_states(machine)
+    for state_config in states.values():
         for event in state_config.get("on", {}).keys():
             events.add(event)
+        # Also check sub-states
+        for sub_config in state_config.get("states", {}).values():
+            for event in sub_config.get("on", {}).keys():
+                events.add(event)
     return events
 
 
 def get_all_states(machine: dict) -> set:
     """Extract all states."""
-    return set(machine.get("states", {}).keys())
+    states = _get_navigation_states(machine)
+    all_states = set(states.keys())
+    # Also include sub-states
+    for state_config in states.values():
+        all_states.update(state_config.get("states", {}).keys())
+    return all_states
 
 
 def _extract_targets(target) -> list:
@@ -56,8 +73,13 @@ def _extract_targets(target) -> list:
 
 def find_reachable_states(machine: dict) -> set:
     """Find all states reachable from initial state (BFS)."""
-    states = machine.get("states", {})
-    initial = machine.get("initial", "")
+    states = _get_navigation_states(machine)
+    
+    # For parallel architecture, get initial from navigation branch
+    if machine.get("type") == "parallel" and "navigation" in machine.get("states", {}):
+        initial = machine["states"]["navigation"].get("initial", "app_idle")
+    else:
+        initial = machine.get("initial", "")
     
     if not initial or initial not in states:
         return set()
@@ -69,13 +91,30 @@ def find_reachable_states(machine: dict) -> set:
     while queue:
         current = queue.popleft()
         if current in states:
-            for event, target in states[current].get("on", {}).items():
+            state_config = states[current]
+            for event, target in state_config.get("on", {}).items():
                 for t in _extract_targets(target):
-                    if t and t not in reachable:
-                        reachable.add(t)
-                        queue.append(t)
+                    t_clean = t.lstrip('.')
+                    if t_clean and t_clean not in reachable:
+                        # Check if target exists in states or sub-states
+                        if t_clean in states or _find_in_sub_states(states, t_clean):
+                            reachable.add(t_clean)
+                            queue.append(t_clean)
+            # Also check sub-states
+            for sub_name, sub_config in state_config.get("states", {}).items():
+                if sub_name not in reachable:
+                    reachable.add(sub_name)
+                    queue.append(sub_name)
     
     return reachable
+
+
+def _find_in_sub_states(states: dict, state_name: str) -> bool:
+    """Check if a state exists as a sub-state anywhere."""
+    for state_config in states.values():
+        if state_name in state_config.get("states", {}):
+            return True
+    return False
 
 
 def _pick_random_target(target) -> str:
@@ -86,12 +125,28 @@ def _pick_random_target(target) -> str:
     return random.choice(targets)
 
 
+def _resolve_state(states: dict, state_name: str) -> dict:
+    """Resolve a state name to its config, checking both top-level and sub-states."""
+    if state_name in states:
+        return states[state_name]
+    # Check sub-states
+    for state_config in states.values():
+        if state_name in state_config.get("states", {}):
+            return state_config["states"][state_name]
+    return {}
+
+
 def simulate_path(machine: dict, max_steps: int = 50) -> dict:
     """Simulate a random path through the state machine."""
-    states = machine.get("states", {})
-    initial = machine.get("initial", "")
+    states = _get_navigation_states(machine)
     
-    if not initial or initial not in states:
+    # For parallel architecture, get initial from navigation branch
+    if machine.get("type") == "parallel" and "navigation" in machine.get("states", {}):
+        initial = machine["states"]["navigation"].get("initial", "app_idle")
+    else:
+        initial = machine.get("initial", "")
+    
+    if not initial or not _resolve_state(states, initial):
         return {"error": "Invalid initial state", "path": []}
     
     path = [initial]
@@ -99,7 +154,16 @@ def simulate_path(machine: dict, max_steps: int = 50) -> dict:
     steps = 0
     
     while steps < max_steps:
-        transitions = states.get(current, {}).get("on", {})
+        current_config = _resolve_state(states, current)
+        if not current_config:
+            return {
+                "status": "dead_end",
+                "path": path,
+                "dead_end_state": current,
+                "steps": steps
+            }
+        
+        transitions = current_config.get("on", {})
         
         if not transitions:
             return {
@@ -121,18 +185,19 @@ def simulate_path(machine: dict, max_steps: int = 50) -> dict:
                 "steps": steps
             }
         
-        if target not in states:
+        target_clean = target.lstrip('.')
+        if not _resolve_state(states, target_clean):
             return {
                 "status": "unknown_target",
                 "path": path,
                 "event": event,
                 "from_state": current,
-                "target": target,
+                "target": target_clean,
                 "steps": steps
             }
         
-        path.append(target)
-        current = target
+        path.append(target_clean)
+        current = target_clean
         steps += 1
     
     if len(path) != len(set(path)):
@@ -151,8 +216,14 @@ def simulate_path(machine: dict, max_steps: int = 50) -> dict:
 
 def detect_loops(machine: dict) -> list:
     """Find all loops in the state machine (DFS)."""
-    states = machine.get("states", {})
+    states = _get_navigation_states(machine)
     loops = []
+    
+    # For parallel architecture, get initial from navigation branch
+    if machine.get("type") == "parallel" and "navigation" in machine.get("states", {}):
+        initial = machine["states"]["navigation"].get("initial", "app_idle")
+    else:
+        initial = machine.get("initial", "")
     
     def dfs(state, visited, path):
         if state in visited:
@@ -164,13 +235,17 @@ def detect_loops(machine: dict) -> list:
         visited.add(state)
         path.append(state)
         
-        for event, target in states.get(state, {}).get("on", {}).items():
+        state_config = _resolve_state(states, state)
+        if not state_config:
+            return
+        
+        for event, target in state_config.get("on", {}).items():
             for t in _extract_targets(target):
-                if t and t in states:
-                    dfs(t, visited.copy(), path.copy())
+                t_clean = t.lstrip('.')
+                if t_clean and _resolve_state(states, t_clean):
+                    dfs(t_clean, visited.copy(), path.copy())
     
-    initial = machine.get("initial", "")
-    if initial in states:
+    if _resolve_state(states, initial):
         dfs(initial, set(), [])
     
     return loops
@@ -195,13 +270,24 @@ def run_fuzz_test(machine: dict, num_paths: int = 100, max_steps_per_path: int =
     for i in range(num_paths):
         result = simulate_path(machine, max_steps_per_path)
         
-        if result["status"] == "dead_end":
+        # Handle error case (invalid initial state, etc.)
+        if "error" in result:
+            path_results["dead_ends"].append({
+                "dead_end_state": "N/A",
+                "path": result.get("path", []),
+                "steps": 0,
+                "error": result["error"]
+            })
+            continue
+        
+        status = result.get("status", "")
+        if status == "dead_end":
             path_results["dead_ends"].append(result)
-        elif result["status"] == "invalid_transition":
+        elif status == "invalid_transition":
             path_results["invalid_transitions"].append(result)
-        elif result["status"] == "unknown_target":
+        elif status == "unknown_target":
             path_results["unknown_targets"].append(result)
-        elif result["status"] == "potential_loop":
+        elif status == "potential_loop":
             path_results["potential_loops"].append(result)
         else:
             path_results["completed_paths"] += 1

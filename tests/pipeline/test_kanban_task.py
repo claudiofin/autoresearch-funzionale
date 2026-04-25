@@ -97,7 +97,7 @@ class TestGenerateTaskMarkdown:
         }
         result = generate_task_markdown(task, 1, "Setup")
         assert "# TASK-01: Test_Task" in result
-        assert "Sprint: 1" in result
+        assert "**Sprint:** 1" in result
         assert "This is a test task." in result
 
     def test_task_with_dependencies(self):
@@ -108,7 +108,7 @@ class TestGenerateTaskMarkdown:
             "dependencies": ["TASK-01"],
         }
         result = generate_task_markdown(task, 1, "Setup")
-        assert "BLOCCATO DA" in result
+        assert "BLOCKED BY" in result
         assert "TASK-01" in result
 
     def test_task_without_dependencies(self):
@@ -119,7 +119,7 @@ class TestGenerateTaskMarkdown:
             "dependencies": [],
         }
         result = generate_task_markdown(task, 1, "Setup")
-        assert "PRONTO PER INIZIARE" in result
+        assert "READY TO START" in result
 
     def test_task_with_parallelization(self):
         task = {
@@ -131,7 +131,7 @@ class TestGenerateTaskMarkdown:
             "parallel_group": "A",
         }
         result = generate_task_markdown(task, 2, "Frontend")
-        assert "PARALLELIZZABILE" in result
+        assert "PARALLELIZABLE" in result
         assert "[A]" in result
 
     def test_task_with_files_to_read(self):
@@ -168,7 +168,7 @@ class TestGenerateTaskMarkdown:
             "dependencies": ["TASK-01"],
         }
         result = generate_task_markdown(task_with_deps, 1, "Setup")
-        assert "Alta" in result  # high priority
+        assert "High" in result  # high priority
 
         task_no_deps = {
             "id": "TASK-01",
@@ -177,7 +177,7 @@ class TestGenerateTaskMarkdown:
             "dependencies": [],
         }
         result = generate_task_markdown(task_no_deps, 1, "Setup")
-        assert "Media" in result  # medium priority
+        assert "Medium" in result  # medium priority
 
 
 class TestGenerateMasterPlan:
@@ -235,7 +235,7 @@ class TestGenerateMasterPlan:
             with open(path, "r") as f:
                 content = f.read()
             assert "TASK-01" in content
-            assert "Dipende da" in content
+            assert "Depends on" in content
 
     def test_master_plan_shows_parallelization(self):
         plan = {
@@ -261,8 +261,8 @@ class TestGenerateMasterPlan:
             path = generate_master_plan(plan, tmpdir)
             with open(path, "r") as f:
                 content = f.read()
-            assert "Parallelizzabile" in content
-            assert "gruppo A" in content
+            assert "Parallelizable" in content
+            assert "group A" in content
 
     def test_master_plan_summary(self):
         plan = {
@@ -291,8 +291,8 @@ class TestGenerateMasterPlan:
             path = generate_master_plan(plan, tmpdir)
             with open(path, "r") as f:
                 content = f.read()
-            assert "Sprint totali: 2" in content
-            assert "Task totali: 3" in content
+            assert "**Total Sprints:** 2" in content
+            assert "**Total Tasks:** 3" in content
 
     def test_master_plan_default_project_name(self):
         plan = {"sprints": []}
@@ -300,4 +300,4 @@ class TestGenerateMasterPlan:
             path = generate_master_plan(plan, tmpdir)
             with open(path, "r") as f:
                 content = f.read()
-            assert "Progetto" in content
+            assert "Project" in content

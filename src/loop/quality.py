@@ -63,17 +63,23 @@ class QualityChecker:
         quality_score = validator_result.get("quality_score")
         critical_issues = critic_result.get("critical_issues", 0)
         
+        # Handle both list and int formats for critical_issues
+        if isinstance(critical_issues, list):
+            critical_count = len(critical_issues)
+        else:
+            critical_count = critical_issues
+        
         if quality_score is not None:
             # Criterion 1: Quality Score 100/100 AND 0 critical issues → STOP
             # IMPORTANT: Don't stop at 100/100 if there are still critical issues!
-            if quality_score == 100 and critical_issues == 0:
+            if quality_score == 100 and critical_count == 0:
                 print(f"\n🎉 Quality Score 100/100! Perfect machine with 0 critical issues.")
                 return True
-            elif quality_score == 100 and critical_issues > 0:
-                print(f"\n⚠️  Quality Score 100/100 but {critical_issues} critical issues — not stopping.")
+            elif quality_score == 100 and critical_count > 0:
+                print(f"\n⚠️  Quality Score 100/100 but {critical_count} critical issues — not stopping.")
             
             # Criterion 2: Quality ≥ 90 AND 0 critical issues → STOP
-            if quality_score >= 90 and critical_issues == 0:
+            if quality_score >= 90 and critical_count == 0:
                 print(f"\n✅ Quality Score {quality_score}/100 with 0 critical issues. Sufficient quality.")
                 return True
         

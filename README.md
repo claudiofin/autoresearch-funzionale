@@ -354,6 +354,96 @@ This gives the agent **all the context it needs** without reading 50,000 tokens 
 python3 run.py wiki-generator --context output/context/project_context.md
 ```
 
+### Complete Pipeline Flow
+
+The full pipeline from raw inputs to AI-ready development tasks:
+
+```
+inputs/ (PDF, notes, HTML)
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│  STEP 1: Frontend Loop                                  │
+│  python3 run.py loop-frontend --input-dir inputs/       │
+│                                                         │
+│  ingest → analyst → spec → validator → fuzzer → critic  │
+│  (iterates until quality score ≥ 90 or 100/100)         │
+│                                                         │
+│  Output: output/spec/spec_machine.json                  │
+│          output/spec/spec.md                            │
+│          output/context/project_context.md              │
+└─────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│  STEP 2: UI Generator                                   │
+│  python3 run.py ui-generator                            │
+│                                                         │
+│  Output: output/ui_specs/DESIGN.md                      │
+│          output/ui_specs/screens/*.md                   │
+└─────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│  STEP 3: Backend + CI/CD + Security (parallel)          │
+│  python3 run.py backend && python3 run.py ci-cd         │
+│  python3 run.py security                                │
+│                                                         │
+│  Output: output/backend/backend_spec.md                 │
+│          output/ci_cd/ci_cd_spec.md                     │
+│          output/security/security_spec.md               │
+└─────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│  STEP 4: LLM Wiki Generator (The "Brain")               │
+│  python3 run.py wiki-generator                          │
+│                                                         │
+│  Output: output/llm_wiki/@TECH_RULES.md                 │
+│          output/llm_wiki/@DOMAIN_GLOSSARY.md            │
+│          output/llm_wiki/@SECURITY_RULES.md             │
+│          output/llm_wiki/project_index.md               │
+│          output/llm_wiki/active_context.md              │
+└─────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│  STEP 5: Kanban Task Generator                          │
+│  python3 run.py kanban-task                             │
+│                                                         │
+│  Each task includes wiki file references:               │
+│  - output/llm_wiki/@TECH_RULES.md                       │
+│  - output/llm_wiki/project_index.md                     │
+│                                                         │
+│  Output: output/kanban_tasks/MASTER_PLAN.md             │
+│          output/kanban_tasks/TASK-01-*.md               │
+│          output/kanban_tasks/TASK-02-*.md               │
+└─────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│  STEP 6: AI Agent Execution (Cline / Claude Code)       │
+│                                                         │
+│  Prompt: "Read MASTER_PLAN.md, pick first task,        │
+│  read wiki files, write code, update active_context.md" │
+│                                                         │
+│  The agent reads the LLM Wiki before every task,        │
+│  ensuring consistent architecture decisions.            │
+└─────────────────────────────────────────────────────────┘
+```
+
+### One-Liner (Complete Pipeline)
+
+```bash
+# Full pipeline from inputs to Kanban tasks
+python3 run.py loop-frontend --input-dir inputs/ --max-iterations 5 --generate-ui \
+&& python3 run.py backend \
+&& python3 run.py ci-cd \
+&& python3 run.py security \
+&& python3 run.py wiki-generator \
+&& python3 run.py kanban-task
+```
+
 ## LLM Configuration
 
 The system supports multiple LLM providers. Configure with environment variables:
