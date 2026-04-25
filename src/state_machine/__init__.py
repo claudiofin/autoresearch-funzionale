@@ -1,7 +1,7 @@
 """State machine operations - builder, post-processing, and validation."""
 
 from .builder import generate_base_machine, build_state_config, add_transitions
-from .post_processing import complete_missing_branches, clean_unreachable_states, validate_no_critical_patterns
+from .post_processing import complete_missing_branches, clean_unreachable_states, validate_no_critical_patterns, create_missing_target_states
 from .validation import (
     load_machine,
     find_dead_end_states,
@@ -18,6 +18,7 @@ __all__ = [
     "complete_missing_branches",
     "clean_unreachable_states",
     "validate_no_critical_patterns",
+    "create_missing_target_states",
     "load_machine",
     "find_dead_end_states",
     "find_unreachable_states",

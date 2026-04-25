@@ -281,11 +281,17 @@ class FrontendRunner:
         if os.path.exists(self.critic_feedback):
             with open(self.critic_feedback, "r") as f:
                 data = json.load(f)
+            
+            critical_count = len(data.get("critical_issues", []))
+            ux_count = len(data.get("ux_decisions_needed", []))
+            missing_count = len(data.get("missing_flows", []))
+            total_issues = critical_count + ux_count + missing_count
+            
             return {
                 "success": True,
-                "total_issues": data.get("summary", {}).get("total_issues", 0),
-                "critical_issues": len(data.get("summary", {}).get("critical_issues", [])),
-                "ux_decisions": len(data.get("summary", {}).get("ux_decisions_needed", [])),
+                "total_issues": total_issues,
+                "critical_issues": critical_count,
+                "ux_decisions": ux_count,
                 "recommendations": len(data.get("recommendations", [])),
                 "output": self.critic_feedback
             }
@@ -323,7 +329,7 @@ class FrontendRunner:
                 ["python3", "-m", "pipeline.ui_generator"] + cmd,
                 capture_output=True,
                 text=True,
-                timeout=600,
+                timeout=3600,
                 env=env,
                 cwd=PROJECT_ROOT
             )
@@ -331,6 +337,10 @@ class FrontendRunner:
                 for line in result.stdout.strip().split("\n"):
                     if line.strip():
                         print(f"  {line}")
+            if result.stderr:
+                for line in result.stderr.strip().split("\n"):
+                    if line.strip():
+                        print(f"  [stderr] {line}")
             
             if result.returncode == 0:
                 print(f"\n  ✅ UI specs generated in {ui_output_dir}/")
@@ -340,8 +350,10 @@ class FrontendRunner:
                 print(f"\n  ⚠️  UI Generator returned error: {result.returncode}")
                 return {"error": f"Exit code {result.returncode}"}
         except subprocess.TimeoutExpired:
+            print("\n  ⚠️  UI Generator timed out after 3600s.")
             return {"error": "pipeline.ui_generator timeout"}
         except Exception as e:
+            print(f"\n  ⚠️  UI Generator error: {e}")
             return {"error": str(e)}
 
 

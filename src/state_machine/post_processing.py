@@ -241,6 +241,56 @@ def clean_unreachable_states(machine: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Post-Processing: Create Missing Target States
+# ---------------------------------------------------------------------------
+
+def create_missing_target_states(machine: dict) -> dict:
+    """Ensure all transition targets exist in the state machine.
+    
+    If a transition targets a sub-state using dot notation (e.g., 'success.benchmark.clustering_calculation')
+    and it doesn't exist, this function creates an empty state for it to prevent crashes.
+    """
+    def ensure_path(path: str):
+        parts = path.lstrip('.').split('.')
+        current = machine.setdefault("states", {})
+        for i, part in enumerate(parts):
+            if part not in current:
+                print(f"  🔧 Created missing target state: {'.'.join(parts[:i+1])}")
+                current[part] = {"entry": [], "exit": [], "on": {}}
+            
+            if i < len(parts) - 1:
+                if "states" not in current[part]:
+                    current[part]["states"] = {}
+                current = current[part]["states"]
+
+    def walk_states(states_dict):
+        for state_config in states_dict.values():
+            on_events = state_config.get("on", {})
+            for target in on_events.values():
+                if isinstance(target, str):
+                    ensure_path(target)
+                elif isinstance(target, dict):
+                    t = target.get("target", "")
+                    if t:
+                        ensure_path(t)
+                elif isinstance(target, list):
+                    for t in target:
+                        if isinstance(t, dict):
+                            t_str = t.get("target", "")
+                            if t_str:
+                                ensure_path(t_str)
+                        elif isinstance(t, str):
+                            ensure_path(t)
+            
+            if "states" in state_config:
+                walk_states(state_config["states"])
+
+    walk_states(machine.get("states", {}))
+    return machine
+
+
+
+# ---------------------------------------------------------------------------
 # Post-Processing: Validate No Critical Patterns (Rules 15, 16, 17)
 # ---------------------------------------------------------------------------
 

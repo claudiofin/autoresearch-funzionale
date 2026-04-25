@@ -243,6 +243,15 @@ Rules:
     - Event names are code identifiers — keep them in English.
     - Comments and descriptions can be in Italian.
 
+21. MICRO-OPERATIONS AND INTERNAL TRANSITIONS (BUSINESS LOGIC):
+    Ensure that each sub-state does NOT ONLY contain navigation events (NAVIGATE_*).
+    You MUST include data manipulation events (micro-operations) as internal transitions or transitions to child states.
+    Examples for a generic app (e.g., e-commerce or social):
+    - In a list/feed state: include "APPLY_FILTER", "LOAD_MORE", or "SEARCH" with appropriate "actions" like ["updateSearchFilters"].
+    - In a detail state: include "LIKE_ITEM", "DELETE_ITEM", or "ADD_TO_CART" with actions like ["updateItemStatus"].
+    - In a form/modal state: include "SUBMIT_DATA" or "CANCEL_EDIT" with actions and/or targets.
+    Without these, the application has no business logic and only acts as an empty navigation shell!
+
 CRITICAL - DO NOT USE THESE REDUNDANT EVENTS (use the consolidated alternatives):
 - DATA_LOADED, DATA_FETCHED -> use ON_SUCCESS (with guard "hasData")
 - FETCH_ERROR, FETCH_FAILED, TIMEOUT, TIMEOUT_FETCH, ERROR -> use ON_ERROR

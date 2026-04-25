@@ -83,6 +83,8 @@ def build_state_config(state: dict) -> dict:
         
         for sub in sub_states:
             sub_name = sub if isinstance(sub, str) else sub.get("name", "")
+            if "." in sub_name:
+                sub_name = sub_name.split(".")[-1]
             sub_entry = [] if isinstance(sub, str) else sub.get("entry_actions", [])
             sub_exit = [] if isinstance(sub, str) else sub.get("exit_actions", [])
             config["states"][sub_name] = {
@@ -94,9 +96,13 @@ def build_state_config(state: dict) -> dict:
         # Auto-generate NAVIGATE events between sub-states
         for sub in sub_states:
             sub_name = sub if isinstance(sub, str) else sub.get("name", "")
+            if "." in sub_name:
+                sub_name = sub_name.split(".")[-1]
             nav_event = f"NAVIGATE_{sub_name.upper()}"
             for other_sub in sub_states:
                 other_name = other_sub if isinstance(other_sub, str) else other_sub.get("name", "")
+                if "." in other_name:
+                    other_name = other_name.split(".")[-1]
                 if other_name != sub_name:
                     config["states"][other_name]["on"][nav_event] = f".{sub_name}"
     
@@ -129,7 +135,9 @@ def add_transitions(machine: dict, transitions: list):
         to_state = trans["to_state"]
         event = trans["event"]
         guard = trans.get("guard") or trans.get("cond")
-        actions = trans.get("actions", [])
+        actions = trans.get("actions") or trans.get("action", [])
+        if isinstance(actions, str):
+            actions = [actions]
         
         # Resolve dot notation (e.g., success.dashboard -> parent='success', child='dashboard')
         target_dict = machine["states"]
