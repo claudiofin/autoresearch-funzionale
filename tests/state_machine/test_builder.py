@@ -41,7 +41,7 @@ class TestGenerateBaseMachine:
     def test_states_has_parallel_branches(self):
         machine = generate_base_machine(use_parallel=True)
         assert "navigation" in machine["states"]
-        assert "active_workflows" in machine["states"]
+        assert "workflows" in machine["states"]
 
 
 class TestFormatXStateActions:
@@ -213,19 +213,19 @@ class TestAddTransitions:
         machine = self._make_machine()
         add_transitions(machine, [{"to_state": "loading", "event": "START"}])
         captured = capsys.readouterr()
-        assert "missing 'from_state'" in captured.out
+        assert "missing required fields" in captured.out
 
     def test_skips_transition_missing_to_state(self, capsys):
         machine = self._make_machine()
         add_transitions(machine, [{"from_state": "idle", "event": "START"}])
         captured = capsys.readouterr()
-        assert "missing 'to_state'" in captured.out
+        assert "missing required fields" in captured.out
 
     def test_skips_transition_missing_event(self, capsys):
         machine = self._make_machine()
         add_transitions(machine, [{"from_state": "idle", "to_state": "loading"}])
         captured = capsys.readouterr()
-        assert "missing 'event'" in captured.out
+        assert "missing required fields" in captured.out
 
     def test_dot_notation_transition(self):
         machine = self._make_machine()
@@ -287,7 +287,7 @@ class TestNormalizeMachine:
         machine = generate_base_machine(use_parallel=True)
         assert machine["type"] == "parallel"
         assert "navigation" in machine["states"]
-        assert "active_workflows" in machine["states"]
+        assert "workflows" in machine["states"]
 
     def test_parallel_architecture_initial_in_navigation(self):
         machine = generate_base_machine(use_parallel=True)
@@ -295,7 +295,7 @@ class TestNormalizeMachine:
 
     def test_parallel_architecture_workflows_starts_with_none(self):
         machine = generate_base_machine(use_parallel=True)
-        assert "none" in machine["states"]["active_workflows"]["states"]
+        assert "none" in machine["states"]["workflows"]["states"]
 
     def test_flat_architecture_no_parallel_type(self):
         machine = generate_base_machine(use_parallel=False)

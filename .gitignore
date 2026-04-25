@@ -40,6 +40,7 @@ output/ci_cd/
 output/kanban_tasks/
 output/llm_wiki/
 output/testbook/
+output/security/
 # Legacy generated files (from old runs)
 project_context.md
 spec.md

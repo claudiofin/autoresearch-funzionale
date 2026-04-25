@@ -1,10 +1,11 @@
-"""State machine validation.
+"""State machine validation — enhanced for parallel states and pattern-compiled machines.
 
 Detects:
 - Dead-end states (states without exit transitions)
-- Unreachable states from initial state
+- Unreachable states from initial state (BFS-aware of parallel branches)
 - Transitions to undefined states
 - Potential infinite loops
+- Cross-branch reference validity
 """
 
 import json
@@ -25,27 +26,38 @@ def _extract_targets(target) -> list:
     - Simple string: "success" -> ["success"]
     - Dict with guard: {"target": "success", "cond": "hasData"} -> ["success"]
     - Array of conditions: [{"target": "success", "cond": "hasData"}, {"target": "empty"}] -> ["success", "empty"]
+    - Global ID: "#navigation.success" -> ["navigation.success"]
     """
     if isinstance(target, str):
+        # Handle global IDs (#prefix)
+        if target.startswith("#"):
+            return [target[1:]]
         return [target]
     elif isinstance(target, dict):
         t = target.get("target", "")
+        if t.startswith("#"):
+            t = t[1:]
         return [t] if t else []
     elif isinstance(target, list):
         targets = []
         for item in target:
             if isinstance(item, dict):
                 t = item.get("target", "")
+                if t.startswith("#"):
+                    t = t[1:]
                 if t:
                     targets.append(t)
             elif isinstance(item, str):
-                targets.append(item)
+                t = item
+                if t.startswith("#"):
+                    t = t[1:]
+                targets.append(t)
         return targets
     return []
 
 
 def _suggest_exit_transitions(state_name: str) -> str:
-    """Suggest exit transitions based on state name."""
+    """Suggest exit transitions based on state name pattern."""
     name = state_name.lower()
     
     if "error" in name or "fail" in name:
@@ -58,120 +70,319 @@ def _suggest_exit_transitions(state_name: str) -> str:
         return "Add: RETRY → loading state, CANCEL → initial state"
     elif "session" in name or "auth" in name:
         return "Add: REAUTHENTICATE → loading state, EXIT → initial state"
+    elif "handler" in name:
+        return "Add: RETRY → parent state, CANCEL → workflow none"
     else:
         return "Add at least one appropriate exit transition"
 
 
-def find_dead_end_states(machine: dict) -> list:
-    """Find states without exit transitions (except final states)."""
-    dead_ends = []
-    states = machine.get("states", {})
+def _collect_all_states_recursive(states: dict, prefix: str = "") -> dict:
+    """Collect all states with their full paths.
     
-    # States that can be final (by convention)
-    final_keywords = ["success", "ready", "complete", "done", "finished"]
+    Returns:
+        Dict mapping full_path → state_config
+    """
+    result = {}
+    for name, config in states.items():
+        full_path = f"{prefix}.{name}" if prefix else name
+        result[full_path] = config
+        if "states" in config and isinstance(config["states"], dict):
+            result.update(_collect_all_states_recursive(config["states"], full_path))
+    return result
+
+
+def _find_dead_ends_in_states(states: dict, prefix: str = "") -> list:
+    """Find dead-end states recursively."""
+    dead_ends = []
+    final_keywords = ["success", "ready", "complete", "done", "finished", "none"]
     
     for state_name, state_config in states.items():
+        full_path = f"{prefix}.{state_name}" if prefix else state_name
         transitions = state_config.get("on", {})
         
         if not transitions:
             # Check if it's a legitimate final state
             is_final = any(kw in state_name.lower() for kw in final_keywords)
+            # error_handler is legitimate (has RETRY/CANCEL in its own on)
+            is_error_handler = "error_handler" in state_name.lower()
             
-            if not is_final:
+            if not is_final and not is_error_handler:
                 dead_ends.append({
-                    "state": state_name,
+                    "state": full_path,
                     "issue": "NO_EXIT_TRANSITIONS",
-                    "description": f"State '{state_name}' has no exit transitions. User gets stuck.",
+                    "description": f"State '{full_path}' has no exit transitions. User gets stuck.",
                     "suggestion": _suggest_exit_transitions(state_name)
                 })
+        
+        # Recurse into sub-states
+        if "states" in state_config and isinstance(state_config["states"], dict):
+            dead_ends.extend(_find_dead_ends_in_states(state_config["states"], full_path))
     
     return dead_ends
 
 
-def find_unreachable_states(machine: dict) -> list:
-    """Find states unreachable from initial state."""
+def find_dead_end_states(machine: dict) -> list:
+    """Find states without exit transitions (except final states).
+    
+    Enhanced to handle parallel states and recursive sub-states.
+    """
+    states = machine.get("states", {})
+    
+    if machine.get("type") == "parallel":
+        # For parallel states, check each branch independently
+        dead_ends = []
+        for branch_name, branch_config in states.items():
+            branch_states = branch_config.get("states", {})
+            dead_ends.extend(_find_dead_ends_in_states(branch_states, branch_name))
+        return dead_ends
+    
+    return _find_dead_ends_in_states(states)
+
+
+def _bfs_parallel(machine: dict) -> set:
+    """BFS for parallel state machines.
+    
+    In parallel states, ALL top-level branches are active simultaneously.
+    We traverse each branch from its initial state.
+    """
+    states = machine.get("states", {})
+    reachable = set()
+    
+    for branch_name, branch_config in states.items():
+        reachable.add(branch_name)
+        
+        branch_states = branch_config.get("states", {})
+        initial = branch_config.get("initial")
+        
+        if initial and initial in branch_states:
+            # BFS within this branch
+            queue = deque([initial])
+            reachable.add(f"{branch_name}.{initial}")
+            
+            while queue:
+                current = queue.popleft()
+                current_config = branch_states.get(current, {})
+                transitions = current_config.get("on", {})
+                
+                for event, target in transitions.items():
+                    for t in _extract_targets(target):
+                        # Resolve relative targets
+                        resolved = _resolve_target_in_branch(t, current, branch_name, branch_states, states)
+                        if resolved and resolved not in reachable:
+                            reachable.add(resolved)
+                            # Add to queue if it's a state in this branch
+                            state_name = resolved.split(".")[-1]
+                            if state_name in branch_states:
+                                queue.append(state_name)
+    
+    return reachable
+
+
+def _resolve_target_in_branch(target: str, current: str, branch: str, branch_states: dict, all_states: dict) -> str:
+    """Resolve a transition target within a parallel branch context."""
+    if not target:
+        return None
+    
+    # Global ID (#prefix)
+    if target.startswith("#"):
+        return target[1:]
+    
+    # Relative reference (.prefix)
+    if target.startswith("."):
+        state_name = target[1:]
+        if state_name in branch_states:
+            return f"{branch}.{state_name}"
+        return None
+    
+    # Contains . → absolute path
+    if "." in target:
+        return target
+    
+    # Simple name → check branch first, then root
+    if target in branch_states:
+        return f"{branch}.{target}"
+    
+    # Check if it's a root-level state
+    if target in all_states:
+        return target
+    
+    return None
+
+
+def _bfs_sequential(machine: dict) -> set:
+    """BFS for sequential (non-parallel) state machines."""
     states = machine.get("states", {})
     initial = machine.get("initial", "")
     
     if not initial or initial not in states:
-        return [{"issue": "INVALID_INITIAL", "description": f"Initial state '{initial}' not found"}]
+        return set()
     
-    # BFS to find all reachable states
-    reachable = set()
+    reachable = {initial}
     queue = deque([initial])
-    reachable.add(initial)
     
     while queue:
         current = queue.popleft()
-        if current in states:
-            transitions = states[current].get("on", {})
-            for event, target in transitions.items():
-                for t in _extract_targets(target):
-                    if t not in reachable:
-                        reachable.add(t)
+        if current not in states:
+            continue
+        
+        transitions = states[current].get("on", {})
+        for event, target in transitions.items():
+            for t in _extract_targets(target):
+                if t.startswith("."):
+                    t = t[1:]
+                
+                if t and t not in reachable:
+                    reachable.add(t)
+                    if t in states:
                         queue.append(t)
     
+    return reachable
+
+
+def find_unreachable_states(machine: dict) -> list:
+    """Find states unreachable from initial state.
+    
+    Enhanced for parallel states: checks each branch independently.
+    Also detects invalid initial state.
+    """
+    states = machine.get("states", {})
+    
+    # Check for invalid initial state (sequential only)
+    if machine.get("type") != "parallel":
+        initial = machine.get("initial", "")
+        if initial and initial not in states:
+            return [{
+                "state": initial,
+                "issue": "INVALID_INITIAL",
+                "description": f"Initial state '{initial}' does not exist in states"
+            }]
+    
+    if machine.get("type") == "parallel":
+        reachable = _bfs_parallel(machine)
+    else:
+        reachable = _bfs_sequential(machine)
+    
+    # Collect all states
+    all_states = _collect_all_states_recursive(states)
+    
     unreachable = []
-    for state_name in states:
-        if state_name not in reachable:
+    for full_path in all_states:
+        if full_path not in reachable:
             unreachable.append({
-                "state": state_name,
+                "state": full_path,
                 "issue": "UNREACHABLE",
-                "description": f"State '{state_name}' is not reachable from initial state '{initial}'"
+                "description": f"State '{full_path}' is not reachable from initial state"
             })
     
     return unreachable
 
 
-def find_invalid_transitions(machine: dict) -> list:
-    """Find transitions pointing to undefined states."""
-    states = machine.get("states", {})
+def _find_invalid_in_states(states: dict, all_state_paths: set, prefix: str = "") -> list:
+    """Find invalid transitions recursively."""
     invalid = []
     
     for state_name, state_config in states.items():
+        full_path = f"{prefix}.{state_name}" if prefix else state_name
         transitions = state_config.get("on", {})
+        
         for event, target in transitions.items():
             for t in _extract_targets(target):
-                if t and t not in states:
-                    invalid.append({
-                        "from_state": state_name,
-                        "event": event,
-                        "target": t,
-                        "issue": "INVALID_TARGET",
-                        "description": f"Transition '{event}' from '{state_name}' points to '{t}' which does not exist"
-                    })
+                if not t:
+                    continue
+                
+                # Check if target exists
+                if t not in all_state_paths:
+                    # Try to resolve relative
+                    resolved = False
+                    if t.startswith("."):
+                        simple = t[1:]
+                        sub_states = state_config.get("states", {})
+                        if simple in sub_states:
+                            resolved = True
+                    
+                    if not resolved:
+                        invalid.append({
+                            "from_state": full_path,
+                            "event": event,
+                            "target": t,
+                            "issue": "INVALID_TARGET",
+                            "description": f"Transition '{event}' from '{full_path}' points to '{t}' which does not exist"
+                        })
+        
+        # Recurse
+        if "states" in state_config and isinstance(state_config["states"], dict):
+            invalid.extend(_find_invalid_in_states(state_config["states"], all_state_paths, full_path))
     
     return invalid
 
 
-def find_potential_infinite_loops(machine: dict) -> list:
-    """Find potential infinite loops (A→B→A without exit)."""
+def find_invalid_transitions(machine: dict) -> list:
+    """Find transitions pointing to undefined states.
+    
+    Enhanced for parallel states and recursive sub-states.
+    """
     states = machine.get("states", {})
+    all_paths = set(_collect_all_states_recursive(states).keys())
+    
+    return _find_invalid_in_states(states, all_paths)
+
+
+def _find_loops_in_states(states: dict, prefix: str = "") -> list:
+    """Find potential infinite loops recursively."""
     loops = []
     
     for state_name, state_config in states.items():
         transitions = state_config.get("on", {})
+        
         for event, target in transitions.items():
             for t in _extract_targets(target):
+                # Resolve relative
+                if t.startswith("."):
+                    t = t[1:]
+                
                 if t and t in states:
-                    # Check if there's a reverse transition
                     target_transitions = states[t].get("on", {})
                     for reverse_event, reverse_target in target_transitions.items():
                         for rt in _extract_targets(reverse_target):
+                            if rt.startswith("."):
+                                rt = rt[1:]
+                            
                             if rt == state_name:
-                                # Cycle found: state_name ↔ t
-                                # Check if at least one of them has an exit
                                 has_exit_from_source = len(transitions) > 1
                                 has_exit_from_target = len(target_transitions) > 1
                                 
                                 if not has_exit_from_source or not has_exit_from_target:
+                                    full_source = f"{prefix}.{state_name}" if prefix else state_name
+                                    full_target = f"{prefix}.{t}" if prefix else t
                                     loops.append({
-                                        "cycle": [state_name, t],
+                                        "cycle": [full_source, full_target],
                                         "issue": "POTENTIAL_INFINITE_LOOP",
-                                        "description": f"Bidirectional cycle: {state_name} ↔ {t}. One of the two states has no other exits."
+                                        "description": f"Bidirectional cycle: {full_source} ↔ {full_target}. One of the two states has no other exits."
                                     })
+        
+        # Recurse
+        if "states" in state_config and isinstance(state_config["states"], dict):
+            full_path = f"{prefix}.{state_name}" if prefix else state_name
+            loops.extend(_find_loops_in_states(state_config["states"], full_path))
     
     return loops
+
+
+def find_potential_infinite_loops(machine: dict) -> list:
+    """Find potential infinite loops (A→B→A without exit).
+    
+    Enhanced for parallel states.
+    """
+    states = machine.get("states", {})
+    
+    if machine.get("type") == "parallel":
+        loops = []
+        for branch_name, branch_config in states.items():
+            branch_states = branch_config.get("states", {})
+            loops.extend(_find_loops_in_states(branch_states, branch_name))
+        return loops
+    
+    return _find_loops_in_states(states)
 
 
 def validate_machine(machine_file) -> dict:
@@ -184,46 +395,44 @@ def validate_machine(machine_file) -> dict:
     else:
         machine = load_machine(machine_file)
     
+    dead_ends = find_dead_end_states(machine)
+    unreachable = find_unreachable_states(machine)
+    invalid = find_invalid_transitions(machine)
+    loops = find_potential_infinite_loops(machine)
+    
+    # Count all transitions (recursive)
+    all_states = _collect_all_states_recursive(machine.get("states", {}))
+    total_transitions = sum(
+        len(s.get("on", {})) for s in all_states.values()
+    )
+    
     results = {
         "machine_id": machine.get("id", "unknown"),
         "initial_state": machine.get("initial", "unknown"),
-        "total_states": len(machine.get("states", {})),
-        "total_transitions": sum(
-            len(s.get("on", {})) for s in machine.get("states", {}).values()
-        ),
-        "dead_end_states": find_dead_end_states(machine),
-        "unreachable_states": find_unreachable_states(machine),
-        "invalid_transitions": find_invalid_transitions(machine),
-        "potential_loops": find_potential_infinite_loops(machine),
-        # Counts for loop.py
-        "dead_end_count": 0,
-        "unreachable_count": 0,
-        "invalid_transition_count": 0,
-        "cycle_count": 0,
+        "total_states": len(all_states),
+        "total_transitions": total_transitions,
+        "dead_end_states": dead_ends,
+        "unreachable_states": unreachable,
+        "invalid_transitions": invalid,
+        "potential_loops": loops,
+        "dead_end_count": len(dead_ends),
+        "unreachable_count": len(unreachable),
+        "invalid_transition_count": len(invalid),
+        "cycle_count": len(loops),
     }
     
-    # Calculate counts
-    results["dead_end_count"] = len(results["dead_end_states"])
-    results["unreachable_count"] = len(results["unreachable_states"])
-    results["invalid_transition_count"] = len(results["invalid_transitions"])
-    results["cycle_count"] = len(results["potential_loops"])
-    
     # Calculate quality score
-    issues_count = (
-        len(results["dead_end_states"]) +
-        len(results["unreachable_states"]) +
-        len(results["invalid_transitions"])
-    )
-    
+    issues_count = len(dead_ends) + len(unreachable) + len(invalid)
     total_states = results["total_states"]
+    
     if total_states > 0:
-        results["quality_score"] = max(0, 100 - (issues_count * 15))
+        results["quality_score"] = max(0, 100 - (issues_count * 10))
     else:
         results["quality_score"] = 0
     
     results["is_valid"] = (
-        len(results["invalid_transitions"]) == 0 and
-        len(results["unreachable_states"]) == 0
+        len(invalid) == 0 and
+        len(unreachable) == 0
     )
     
     return results
