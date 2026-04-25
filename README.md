@@ -4,16 +4,35 @@
 
 The idea is inspired by Andrej Karpathy's [autoresearch](https://github.com/karpathy/autoresearch) project, but applied to Product Management instead of LLM model training.
 
+## 🆕 Latest: Journey-Centric Architecture with Parallel States
+
+The system now supports **Journey-Centric** state machine architecture with **Parallel States** (XState v5). Instead of just modeling pages, it now models **user journeys** (workflows) that span multiple screens while maintaining persistent state.
+
+### What's New
+
+- **Parallel States Architecture**: Root state machine uses `type: "parallel"` with two branches:
+  - `navigation`: tracks which page the user is on
+  - `active_workflows`: tracks which workflow is currently active
+- **Workflow Compound States**: Multi-step processes (benchmark, purchase groups, price alerts) are now first-class citizens with internal micro-states
+- **LLM Wiki Generator**: Creates a "Memory Bank" for AI coding agents (Tech Rules, Domain Glossary, Architecture Map)
+- **Security Pipeline**: Automated security analysis (OWASP Top 10, data protection, auth security)
+- **Enhanced Analyst**: Now identifies workflows from verbs of action (partecipare, confrontare, monitorare)
+
 ## How It Works
 
 1. **Input**: text files, notes, screenshots, HTML from UIs
 2. **Ingest**: extracts context from raw material
-3. **Analyst**: the LLM analyzes and generates states, transitions, edge cases
-4. **Spec**: generates functional specification with PlantUML diagrams and XState state machine
+3. **Analyst**: the LLM analyzes and generates states, transitions, edge cases, **and workflows**
+4. **Spec**: generates functional specification with PlantUML diagrams and XState state machine (parallel architecture)
 5. **Validator**: validates that all critical flows are present
 6. **Fuzzer**: tests the state machine with random paths
 7. **Critic**: hostile reviewer (finds missing edge cases)
 8. **Loop**: the system iterates automatically improving the specification
+9. **UI Generator**: creates Markdown blueprints for AI UI generators
+10. **LLM Wiki Generator**: creates Memory Bank for AI coding agents
+11. **Security Pipeline**: analyzes security requirements
+12. **Backend Pipeline**: generates backend specification
+13. **CI/CD Pipeline**: generates CI/CD specification
 
 ## Quick Start
 
@@ -64,7 +83,7 @@ export LLM_PROVIDER="openai"  # or anthropic, google, dashscope, coding
 
 ## Running All Pipelines
 
-The system has **three independent pipelines**: Frontend, Backend, and CI/CD.
+The system has **four independent pipelines**: Frontend, Backend, CI/CD, and Security.
 
 ```bash
 # Set LLM credentials (or let run.py prompt you)
@@ -82,6 +101,12 @@ python3 run.py backend-critic
 
 # 3. CI/CD pipeline
 python3 run.py ci-cd
+
+# 4. Security pipeline
+python3 run.py security
+
+# 5. LLM Wiki Generator (creates Memory Bank for AI agents)
+python3 run.py wiki-generator
 ```
 
 ### One-Liner (All Pipelines)
@@ -91,7 +116,9 @@ LLM_API_KEY="sk-..." LLM_PROVIDER="coding" LLM_MODEL="qwen3.5-plus" LLM_BASE_URL
 python3 run.py loop-frontend --input-dir inputs/ --max-iterations 5 --time-budget 600 --generate-ui \
 && python3 run.py backend \
 && python3 run.py backend-critic \
-&& python3 run.py ci-cd
+&& python3 run.py ci-cd \
+&& python3 run.py security \
+&& python3 run.py wiki-generator
 ```
 
 ### Execution Modes
@@ -122,6 +149,12 @@ python3 run.py ci-cd --spec output/spec/spec.md --backend-spec output/backend/ba
 
 # Mode 7: UI Generator
 python3 run.py ui-generator --machine output/spec/spec_machine.json --context output/context/project_context.md
+
+# Mode 8: Security Pipeline
+python3 run.py security --spec output/spec/spec.md --backend-spec output/backend/backend_spec.md
+
+# Mode 9: LLM Wiki Generator
+python3 run.py wiki-generator --context output/context/project_context.md
 ```
 
 ## Project Structure
@@ -133,10 +166,10 @@ autoresearch/
 │   ├── context/
 │   │   └── project_context.md   # Extracted context
 │   ├── analyst/
-│   │   └── analyst_suggestions.json  # LLM analysis
+│   │   └── analyst_suggestions.json  # LLM analysis (includes workflows)
 │   ├── spec/
 │   │   ├── spec.md              # Functional specification with PlantUML
-│   │   ├── spec_machine.json    # XState state machine
+│   │   ├── spec_machine.json    # XState state machine (parallel architecture)
 │   │   ├── fuzz_report.json     # Fuzzer report
 │   │   └── critic_report.json   # Critic feedback
 │   ├── backend/
@@ -144,11 +177,20 @@ autoresearch/
 │   │   └── critic_report.json   # Backend critic report
 │   ├── ci_cd/
 │   │   └── ci_cd_spec.md        # CI/CD functional specification
+│   ├── security/
+│   │   └── security_spec.md     # Security analysis (OWASP Top 10)
 │   ├── ui_specs/                # UI specifications for AI generators
 │   │   ├── DESIGN.md            # Design system
 │   │   ├── README.md            # Index with PlantUML diagram
 │   │   ├── screens/             # Real screens (ready for v0/Claude)
 │   │   └── states/              # Machine states (reference)
+│   ├── llm_wiki/                # Memory Bank for AI coding agents
+│   │   ├── @TECH_RULES.md       # Tech stack, architecture, absolute rules
+│   │   ├── @DOMAIN_GLOSSARY.md  # Domain terminology (Clinic, Smart Group, etc.)
+│   │   ├── @ARCHITECTURE_MAP.md # Directory structure rules
+│   │   ├── @SECURITY_RULES.md   # Security requirements
+│   │   ├── project_index.md     # Project index (where to find everything)
+│   │   └── active_context.md    # Development log (updated by AI agent)
 │   └── loop_checkpoints/        # Loop iteration checkpoints
 │       ├── checkpoint_iter_001.json
 │       └── final_report.json
@@ -162,8 +204,8 @@ autoresearch/
 │   ├── pipeline/              # Pipeline stages
 │   │   ├── ingest/            # Context extraction
 │   │   ├── frontend/          # Frontend analysis pipeline
-│   │   │   ├── analyst/       # State/transition analysis
-│   │   │   ├── spec/          # Specification generation
+│   │   │   ├── analyst/       # State/transition/workflow analysis
+│   │   │   ├── spec/          # Specification generation (parallel states)
 │   │   │   ├── validator/     # State machine validation
 │   │   │   ├── fuzzer/        # Fuzz testing
 │   │   │   └── critic/        # Critical review
@@ -172,9 +214,15 @@ autoresearch/
 │   │   │   └── critic.py      # Backend critic
 │   │   ├── ci_cd/             # CI/CD specification
 │   │   │   └── planner.py     # CI/CD planner
-│   │   └── ui_generator/      # UI spec generation
+│   │   ├── ui_generator/      # UI spec generation
+│   │   ├── security/          # Security analysis
+│   │   │   ├── auditor.py     # Security auditor (OWASP Top 10)
+│   │   │   └── __main__.py    # CLI entry point
+│   │   └── wiki_generator/    # LLM Wiki / Memory Bank generator
+│   │       ├── wiki_generator.py  # Generates Tech Rules, Glossary, Index
+│   │       └── __main__.py    # CLI entry point
 │   ├── state_machine/         # XState machine building
-│   │   ├── builder.py         # Machine builder with action formatting
+│   │   ├── builder.py         # Machine builder (parallel states, workflows)
 │   │   ├── post_processing.py # Post-processing (dedup, cleanup)
 │   │   └── validation.py      # State machine validation
 │   ├── diagrams/              # Diagram generation
@@ -185,6 +233,125 @@ autoresearch/
 │       └── prompts.py         # LLM prompt templates
 ├── run.py                     # Main entry point (with interactive LLM config)
 └── requirements.txt           # Python dependencies
+```
+
+## 🆕 Journey-Centric Architecture
+
+### From Page-Centric to Journey-Centric
+
+Traditional state machines model **pages** (login, dashboard, catalog). Our system now models **journeys** (benchmark comparison, purchase group participation, price alert setup) that span multiple pages while maintaining persistent state.
+
+### Parallel States Architecture
+
+The root state machine uses `type: "parallel"` with two independent branches:
+
+```json
+{
+  "id": "appFlow",
+  "type": "parallel",
+  "states": {
+    "navigation": {
+      "initial": "app_idle",
+      "states": {
+        "app_idle": { "on": { "START_APP": "authenticating" } },
+        "authenticating": { "on": { "ON_SUCCESS": "success", "ON_ERROR": "error" } },
+        "loading": { "on": { "ON_SUCCESS": "success", "ON_ERROR": "error" } },
+        "success": {
+          "initial": "dashboard",
+          "states": {
+            "dashboard": { "on": { "NAVIGATE_CATALOG": "catalog", "VIEW_BENCHMARK": "#active_workflows.benchmark_workflow.discovery" } },
+            "catalog": { "on": { "NAVIGATE_DASHBOARD": "dashboard", "VIEW_BENCHMARK": "#active_workflows.benchmark_workflow.discovery" } }
+          }
+        },
+        "error": { "on": { "RETRY_FETCH": "loading", "CANCEL": "app_idle" } }
+      }
+    },
+    "active_workflows": {
+      "initial": "none",
+      "states": {
+        "none": {},
+        "benchmark_workflow": {
+          "initial": "discovery",
+          "states": {
+            "discovery": {
+              "entry": ["showBenchmarkOverlay"],
+              "on": { "VIEW_DETAILS": "viewing", "GO_BACK": "none" }
+            },
+            "viewing": {
+              "entry": ["showPriceComparison"],
+              "on": { "JOIN_GROUP": "joining", "GO_BACK": "discovery" }
+            },
+            "joining": {
+              "entry": ["showJoinConfirmation"],
+              "on": { "CONFIRM_JOIN": "tracking", "CANCEL": "viewing" }
+            },
+            "tracking": {
+              "entry": ["showGroupProgress"],
+              "on": { "GROUP_COMPLETE": "none", "GO_BACK": "discovery" }
+            }
+          },
+          "on": {
+            "NAVIGATE_DASHBOARD": "#navigation.success.dashboard",
+            "NAVIGATE_CATALOG": "#navigation.success.catalog"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+### Key Benefits
+
+1. **Persistent State**: Workflow remains active even if user navigates to different page
+2. **Context-Aware UI**: AI agent (Cline/Claude) knows which workflow is active and shows appropriate UI
+3. **Scalability**: New workflows added under `active_workflows` without breaking navigation
+4. **Mandatory Completion**: Every workflow has a completion event (COMPLETED, CANCELLED, DISMISSED) → "none"
+5. **Cross-Page Navigation**: Workflows can navigate to pages using `#navigation.` prefix
+
+### Workflow Identification
+
+The Analyst now identifies workflows from the input context by looking for:
+
+- **Verbs of Action**: partecipare, confrontare, ricevere, unirsi, monitorare, vedere, scoprire
+- **Multi-Step Processes**: anything that spans multiple screens
+- **User Journeys**: "voglio vedere se risparmio" → benchmark_workflow
+- **Domain Concepts**: "gruppi d'acquisto" → purchase_group_workflow, "alert prezzi" → price_alert_workflow
+
+## LLM Wiki (Memory Bank for AI Agents)
+
+The LLM Wiki is a **persistent, structured knowledge base** that AI coding agents (Cline, Claude Code) read before writing code. It prevents context window pollution and ensures consistent architecture decisions.
+
+### Generated Files
+
+| File | Purpose |
+|------|---------|
+| `@TECH_RULES.md` | Tech stack, architecture rules, absolute prohibitions (❌ NO Redux, ❌ NO MUI) |
+| `@DOMAIN_GLOSSARY.md` | Domain terminology mapping (Clinic → ClinicProfile, Smart Group → PurchaseGroup) |
+| `@ARCHITECTURE_MAP.md` | Directory structure rules (where to save files) |
+| `@SECURITY_RULES.md` | Security requirements (OWASP Top 10, data protection) |
+| `project_index.md` | Project index (where to find every generated file) |
+| `active_context.md` | Development log (updated by AI agent after each task) |
+
+### How AI Agents Use It
+
+When Cline opens a Kanban task, it reads:
+
+```
+📚 Context Links (Read before coding):
+- output/llm_wiki/@TECH_RULES.md
+- output/llm_wiki/@DOMAIN_GLOSSARY.md
+- output/llm_wiki/project_index.md
+- output/ui_specs/screens/01_login.md
+```
+
+This gives the agent **all the context it needs** without reading 50,000 tokens of analysis documents.
+
+### Generation
+
+```bash
+# Generate LLM Wiki from project context
+python3 run.py wiki-generator --context output/context/project_context.md
 ```
 
 ## LLM Configuration
@@ -341,8 +508,8 @@ Each Markdown file contains:
 The generated specification includes:
 
 1. **User Flows**: textual description of all user flows
-2. **State Diagram (PlantUML)**: executable state diagram
-3. **XState Configuration**: JSON state machine compatible with XState
+2. **State Diagram (PlantUML)**: executable state diagram (parallel architecture)
+3. **XState Configuration**: JSON state machine compatible with XState v5
 4. **Sequence Diagram (PlantUML)**: User → Interface → Backend sequence diagram
 5. **Edge Cases**: table with all identified edge cases
 6. **Error Handling**: error handling with HTTP codes and recovery
@@ -363,30 +530,73 @@ The state machine is in JSON format compatible with [XState](https://xstate.js.o
 ```json
 {
   "id": "appFlow",
-  "initial": "app_idle",
+  "type": "parallel",
   "context": {"user": null, "errors": [], "retryCount": 0, "previousState": null},
   "states": {
-    "app_idle": {
-      "entry": ["initializeApp"],
-      "on": {
-        "START": "loading"
+    "navigation": {
+      "initial": "app_idle",
+      "states": {
+        "app_idle": {
+          "on": { "START_APP": "authenticating" }
+        },
+        "loading": {
+          "entry": ["showLoadingIndicator", "start_timeout_timer"],
+          "exit": ["stop_timeout_timer"],
+          "on": {
+            "ON_SUCCESS": {
+              "target": "success",
+              "cond": "hasData",
+              "actions": [{"type": "assign", "assignment": {"retryCount": 0}}]
+            },
+            "ON_SUCCESS": "empty",
+            "ON_ERROR": "error"
+          }
+        }
       }
     },
-    "loading": {
-      "entry": ["showLoadingIndicator", "start_timeout_timer"],
-      "exit": ["stop_timeout_timer"],
-      "on": {
-        "ON_SUCCESS": {
-          "target": "success",
-          "cond": "hasData",
-          "actions": [{"type": "assign", "assignment": {"retryCount": 0}}]
-        },
-        "ON_SUCCESS": "empty",
-        "ON_ERROR": "error"
+    "active_workflows": {
+      "initial": "none",
+      "states": {
+        "none": {},
+        "benchmark_workflow": {
+          "initial": "discovery",
+          "states": {
+            "discovery": {
+              "entry": ["showBenchmarkOverlay"],
+              "on": { "VIEW_DETAILS": "viewing", "GO_BACK": "none" }
+            }
+          }
+        }
       }
     }
   }
 }
+```
+
+## Security Pipeline
+
+The security pipeline analyzes the functional specification and generates a comprehensive security report based on OWASP Top 10 and domain-specific requirements.
+
+```bash
+# Run security analysis
+python3 run.py security --spec output/spec/spec.md --backend-spec output/backend/backend_spec.md
+```
+
+### Security Categories
+
+| Category | Description |
+|----------|-------------|
+| **Authentication & Authorization** | JWT, session management, role-based access |
+| **Data Protection** | GDPR compliance, data encryption, retention policies |
+| **API Security** | Rate limiting, input validation, CORS |
+| **Infrastructure** | HTTPS, security headers, dependency scanning |
+| **Business Logic** | Benchmark manipulation, group fraud, price tampering |
+
+### Output
+
+```
+output/security/
+└── security_spec.md     # Security analysis with risk levels
 ```
 
 ## Design Choices
@@ -403,7 +613,7 @@ The system **requires** an LLM to work. There are no simulated fallbacks.
 
 The system uses a two-level approach:
 
-1. **Rules** (`src/rules.py`): say WHAT must be there (e.g., "there must be an authentication flow")
+1. **Rules** (embedded in prompts): say WHAT must be there (e.g., "there must be an authentication flow")
 2. **LLM**: decides HOW it's named (e.g., "login_form → login_pending → login_success")
 
 This allows the system to be generic and adapt to any project.
@@ -420,8 +630,8 @@ The diagrams are in PlantUML because:
 
 The system iterates automatically:
 
-1. **Analyst** generates states and transitions
-2. **Spec** generates the specification with PlantUML
+1. **Analyst** generates states, transitions, and workflows
+2. **Spec** generates the specification with PlantUML (parallel architecture)
 3. **Validator** validates that all flows are present
 4. **Fuzzer** tests the state machine
 5. **Critic** finds missing edge cases
@@ -433,6 +643,16 @@ The system iterates automatically:
 - Convergence: Quality Score doesn't improve for 2 consecutive iterations
 - Max iterations reached
 - Timeout reached
+
+### Journey-Centric vs Page-Centric
+
+| Aspect | Page-Centric (Old) | Journey-Centric (New) |
+|--------|-------------------|----------------------|
+| Root structure | Flat states | Parallel states (navigation + workflows) |
+| Multi-step flows | Scattered across pages | Encapsulated in compound states |
+| State persistence | Lost on navigation | Maintained across page changes |
+| AI agent context | Must read all specs | Reads LLM Wiki (condensed) |
+| Scalability | Linear growth | Modular workflow addition |
 
 ## Requirements
 

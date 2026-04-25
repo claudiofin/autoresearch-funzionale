@@ -6,7 +6,26 @@ Handles:
 - Ensuring session_expired has REAUTHENTICATE transition
 - Cleaning unreachable states and XState keywords
 - Validating critical rules (15, 16, 17)
+
+Supports both flat and parallel state machine architectures.
 """
+
+
+def _get_states_for_processing(machine: dict) -> dict:
+    """Get the states dict to process, handling both flat and parallel architectures.
+    
+    For parallel architecture, returns the navigation branch states.
+    For flat architecture, returns the root states.
+    
+    Args:
+        machine: The state machine dict.
+    
+    Returns:
+        The states dict to process.
+    """
+    if machine.get("type") == "parallel" and "navigation" in machine.get("states", {}):
+        return machine["states"]["navigation"].get("states", {})
+    return machine.get("states", {})
 
 
 # ---------------------------------------------------------------------------
@@ -25,7 +44,7 @@ def remove_toplevel_duplicates(machine: dict) -> dict:
     Returns:
         Fixed machine dict.
     """
-    states = machine.get("states", {})
+    states = _get_states_for_processing(machine)
     success_sub_states = states.get("success", {}).get("states", {})
     
     if not success_sub_states:
@@ -53,6 +72,8 @@ def complete_missing_branches(machine: dict) -> dict:
     The LLM often generates only the negative branch (e.g., "!hasData" → empty)
     but forgets the positive branch (e.g., "hasData" → success). This function
     detects missing branches and adds them automatically.
+    
+    Supports both flat and parallel architectures.
     
     Args:
         machine: The state machine dict to fix.
@@ -82,7 +103,7 @@ def complete_missing_branches(machine: dict) -> dict:
         },
     }
     
-    all_states = machine.get("states", {})
+    all_states = _get_states_for_processing(machine)
     fixed_count = 0
     
     for state_name, state_config in all_states.items():
@@ -173,14 +194,21 @@ def clean_unreachable_states(machine: dict) -> dict:
     The LLM sometimes generates states like 'initial' (which is an XState keyword)
     or states that have no path from the initial state. This function cleans them up.
     
+    Supports both flat and parallel architectures.
+    
     Args:
         machine: The state machine dict to clean.
     
     Returns:
         Cleaned machine dict.
     """
-    initial_state = machine.get("initial", "app_idle")
-    all_states = machine.get("states", {})
+    # For parallel architecture, get initial from navigation branch
+    if machine.get("type") == "parallel" and "navigation" in machine.get("states", {}):
+        initial_state = machine["states"]["navigation"].get("initial", "app_idle")
+        all_states = machine["states"]["navigation"].get("states", {})
+    else:
+        initial_state = machine.get("initial", "app_idle")
+        all_states = machine.get("states", {})
     
     # XState reserved keywords that should never be state names
     XSTATE_KEYWORDS = {"initial", "states", "on", "entry", "exit", "context", "id", "type", "invoke", "activities"}
@@ -249,10 +277,18 @@ def create_missing_target_states(machine: dict) -> dict:
     
     If a transition targets a sub-state using dot notation (e.g., 'success.benchmark.clustering_calculation')
     and it doesn't exist, this function creates an empty state for it to prevent crashes.
+    
+    Supports both flat and parallel architectures.
     """
+    # For parallel architecture, work with navigation branch states
+    if machine.get("type") == "parallel" and "navigation" in machine.get("states", {}):
+        states_root = machine["states"]["navigation"].get("states", {})
+    else:
+        states_root = machine.get("states", {})
+    
     def ensure_path(path: str):
         parts = path.lstrip('.').split('.')
-        current = machine.setdefault("states", {})
+        current = states_root
         for i, part in enumerate(parts):
             if part not in current:
                 print(f"  🔧 Created missing target state: {'.'.join(parts[:i+1])}")
@@ -264,30 +300,36 @@ def create_missing_target_states(machine: dict) -> dict:
                 current = current[part]["states"]
 
     def walk_states(states_dict):
-        for state_config in states_dict.values():
+        # Collect all targets first, then create them (avoid modifying dict during iteration)
+        targets_to_create = []
+        
+        for state_config in list(states_dict.values()):
             on_events = state_config.get("on", {})
             for target in on_events.values():
                 if isinstance(target, str):
-                    ensure_path(target)
+                    targets_to_create.append(target)
                 elif isinstance(target, dict):
                     t = target.get("target", "")
                     if t:
-                        ensure_path(t)
+                        targets_to_create.append(t)
                 elif isinstance(target, list):
                     for t in target:
                         if isinstance(t, dict):
                             t_str = t.get("target", "")
                             if t_str:
-                                ensure_path(t_str)
+                                targets_to_create.append(t_str)
                         elif isinstance(t, str):
-                            ensure_path(t)
+                            targets_to_create.append(t)
             
             if "states" in state_config:
                 walk_states(state_config["states"])
+        
+        # Now create all missing targets
+        for target in targets_to_create:
+            ensure_path(target)
 
-    walk_states(machine.get("states", {}))
+    walk_states(states_root)
     return machine
-
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +342,8 @@ def validate_no_critical_patterns(machine: dict) -> list:
     Returns a list of violation messages. Empty list = no violations.
     Messages are designed to be "speaking" — they tell the LLM exactly what's wrong.
     
+    Supports both flat and parallel architectures.
+    
     Args:
         machine: The state machine dict to validate.
     
@@ -307,7 +351,7 @@ def validate_no_critical_patterns(machine: dict) -> list:
         List of violation message strings.
     """
     violations = []
-    all_states = machine.get("states", {})
+    all_states = _get_states_for_processing(machine)
     
     # --- Rule 15: No duplicate states (success_* vs *) ---
     success_state = all_states.get("success", {})

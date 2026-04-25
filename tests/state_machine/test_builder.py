@@ -6,21 +6,24 @@ from state_machine.builder import (
     generate_base_machine,
     build_state_config,
     add_transitions,
+    add_transitions_to_branch,
     normalize_machine,
+    build_workflow_compound_state,
+    add_workflows_to_machine,
     _format_xstate_actions,
 )
 
 
 class TestGenerateBaseMachine:
     def test_returns_dict_with_required_keys(self):
-        machine = generate_base_machine()
+        machine = generate_base_machine(use_parallel=False)
         assert "id" in machine
         assert "initial" in machine
         assert "context" in machine
         assert "states" in machine
 
     def test_initial_state_is_app_idle(self):
-        machine = generate_base_machine()
+        machine = generate_base_machine(use_parallel=False)
         assert machine["initial"] == "app_idle"
 
     def test_context_has_default_values(self):
@@ -31,9 +34,14 @@ class TestGenerateBaseMachine:
         assert ctx["retryCount"] == 0
         assert ctx["previousState"] is None
 
-    def test_states_starts_empty(self):
-        machine = generate_base_machine()
+    def test_states_starts_empty_flat(self):
+        machine = generate_base_machine(use_parallel=False)
         assert machine["states"] == {}
+
+    def test_states_has_parallel_branches(self):
+        machine = generate_base_machine(use_parallel=True)
+        assert "navigation" in machine["states"]
+        assert "active_workflows" in machine["states"]
 
 
 class TestFormatXStateActions:
@@ -274,3 +282,295 @@ class TestNormalizeMachine:
         }
         result = normalize_machine(machine)
         assert "app_idle" in result["states"]
+
+    def test_parallel_architecture_has_navigation_and_workflows(self):
+        machine = generate_base_machine(use_parallel=True)
+        assert machine["type"] == "parallel"
+        assert "navigation" in machine["states"]
+        assert "active_workflows" in machine["states"]
+
+    def test_parallel_architecture_initial_in_navigation(self):
+        machine = generate_base_machine(use_parallel=True)
+        assert machine["states"]["navigation"]["initial"] == "app_idle"
+
+    def test_parallel_architecture_workflows_starts_with_none(self):
+        machine = generate_base_machine(use_parallel=True)
+        assert "none" in machine["states"]["active_workflows"]["states"]
+
+    def test_flat_architecture_no_parallel_type(self):
+        machine = generate_base_machine(use_parallel=False)
+        assert machine.get("type") != "parallel"
+        assert "navigation" not in machine["states"]
+
+
+class TestAddTransitionsToBranch:
+    def _make_parallel_machine(self):
+        return {
+            "id": "appFlow",
+            "type": "parallel",
+            "context": {"user": None, "errors": [], "retryCount": 0, "previousState": None},
+            "states": {
+                "navigation": {
+                    "initial": "app_idle",
+                    "states": {
+                        "app_idle": {"entry": [], "exit": [], "on": {}},
+                        "loading": {"entry": [], "exit": [], "on": {}},
+                        "success": {
+                            "entry": [],
+                            "exit": [],
+                            "on": {},
+                            "states": {
+                                "dashboard": {"entry": [], "exit": [], "on": {}},
+                                "catalog": {"entry": [], "exit": [], "on": {}},
+                            },
+                        },
+                    },
+                },
+                "active_workflows": {
+                    "initial": "none",
+                    "states": {"none": {}},
+                },
+            },
+        }
+
+    def test_simple_transition_in_navigation(self):
+        machine = self._make_parallel_machine()
+        add_transitions_to_branch(machine, [
+            {"from_state": "app_idle", "to_state": "loading", "event": "START_APP"}
+        ])
+        nav = machine["states"]["navigation"]["states"]
+        assert nav["app_idle"]["on"]["START_APP"] == "loading"
+
+    def test_transition_with_guard_in_navigation(self):
+        machine = self._make_parallel_machine()
+        add_transitions_to_branch(machine, [
+            {
+                "from_state": "loading",
+                "to_state": "success",
+                "event": "ON_SUCCESS",
+                "guard": "hasData",
+            }
+        ])
+        nav = machine["states"]["navigation"]["states"]
+        trans = nav["loading"]["on"]["ON_SUCCESS"]
+        assert trans["target"] == "success"
+        assert trans["cond"] == "hasData"
+
+    def test_dot_notation_in_navigation_branch(self):
+        machine = self._make_parallel_machine()
+        add_transitions_to_branch(machine, [
+            {
+                "from_state": "success.dashboard",
+                "to_state": "catalog",
+                "event": "NAVIGATE_CATALOG",
+            }
+        ])
+        nav = machine["states"]["navigation"]["states"]["success"]["states"]
+        assert "NAVIGATE_CATALOG" in nav["dashboard"]["on"]
+
+    def test_skips_invalid_transitions(self):
+        machine = self._make_parallel_machine()
+        # Invalid transitions are silently skipped (no print)
+        add_transitions_to_branch(machine, [
+            {"to_state": "loading", "event": "START"},  # missing from_state
+            {"from_state": "app_idle", "event": "START"},  # missing to_state
+            {"from_state": "app_idle", "to_state": "loading"},  # missing event
+        ])
+        # Verify no transitions were added to app_idle
+        nav = machine["states"]["navigation"]["states"]
+        assert nav["app_idle"]["on"] == {}
+
+
+class TestBuildWorkflowCompoundState:
+    def test_workflow_has_initial_and_states(self):
+        workflow = {
+            "id": "benchmark_workflow",
+            "name": "Benchmark Comparison",
+            "steps": ["discovery", "viewing", "joining", "tracking"],
+            "cross_page_events": ["VIEW_DETAILS", "JOIN_GROUP", "CONFIRM_JOIN"],
+            "completion_events": ["COMPLETED", "CANCELLED"],
+        }
+        result = build_workflow_compound_state(workflow)
+        assert result["initial"] == "discovery"
+        assert "discovery" in result["states"]
+        assert "viewing" in result["states"]
+        assert "joining" in result["states"]
+        assert "tracking" in result["states"]
+
+    def test_workflow_steps_have_entry_actions(self):
+        workflow = {
+            "id": "benchmark_workflow",
+            "name": "Benchmark Comparison",
+            "steps": ["discovery", "viewing"],
+            "cross_page_events": ["VIEW_DETAILS"],
+            "completion_events": ["COMPLETED"],
+        }
+        result = build_workflow_compound_state(workflow)
+        assert "showDiscovery" in result["states"]["discovery"]["entry"]
+        assert "showViewing" in result["states"]["viewing"]["entry"]
+
+    def test_workflow_steps_have_next_transition(self):
+        workflow = {
+            "id": "benchmark_workflow",
+            "name": "Benchmark Comparison",
+            "steps": ["discovery", "viewing", "joining"],
+            "cross_page_events": ["VIEW_DETAILS", "JOIN_GROUP"],
+            "completion_events": ["COMPLETED"],
+        }
+        result = build_workflow_compound_state(workflow)
+        assert result["states"]["discovery"]["on"]["VIEW_DETAILS"] == "viewing"
+        assert result["states"]["viewing"]["on"]["JOIN_GROUP"] == "joining"
+
+    def test_workflow_steps_have_go_back_transition(self):
+        workflow = {
+            "id": "benchmark_workflow",
+            "name": "Benchmark Comparison",
+            "steps": ["discovery", "viewing"],
+            "cross_page_events": ["VIEW_DETAILS"],
+            "completion_events": ["COMPLETED"],
+        }
+        result = build_workflow_compound_state(workflow)
+        assert result["states"]["viewing"]["on"]["GO_BACK"] == "discovery"
+        assert result["states"]["discovery"]["on"]["GO_BACK"] == "none"
+
+    def test_workflow_steps_have_cancel_transition(self):
+        workflow = {
+            "id": "benchmark_workflow",
+            "name": "Benchmark Comparison",
+            "steps": ["discovery", "viewing"],
+            "cross_page_events": ["VIEW_DETAILS"],
+            "completion_events": ["COMPLETED"],
+        }
+        result = build_workflow_compound_state(workflow)
+        assert result["states"]["discovery"]["on"]["CANCEL"] == "none"
+        assert result["states"]["viewing"]["on"]["CANCEL"] == "none"
+
+    def test_last_step_has_completion_events(self):
+        workflow = {
+            "id": "benchmark_workflow",
+            "name": "Benchmark Comparison",
+            "steps": ["discovery", "tracking"],
+            "cross_page_events": ["CONFIRM_JOIN"],
+            "completion_events": ["COMPLETED", "CANCELLED"],
+        }
+        result = build_workflow_compound_state(workflow)
+        last_step = result["states"]["tracking"]["on"]
+        assert last_step["COMPLETED"] == "none"
+        assert last_step["CANCELLED"] == "none"
+
+    def test_empty_steps_returns_empty_dict(self):
+        workflow = {
+            "id": "empty_workflow",
+            "name": "Empty",
+            "steps": [],
+            "cross_page_events": [],
+            "completion_events": [],
+        }
+        result = build_workflow_compound_state(workflow)
+        assert result == {}
+
+    def test_cross_page_navigation_events(self):
+        workflow = {
+            "id": "benchmark_workflow",
+            "name": "Benchmark Comparison",
+            "steps": ["discovery"],
+            "cross_page_events": ["NAVIGATE_DASHBOARD"],
+            "completion_events": ["COMPLETED"],
+        }
+        result = build_workflow_compound_state(workflow)
+        assert "NAVIGATE_DASHBOARD" in result["on"]
+        assert result["on"]["NAVIGATE_DASHBOARD"] == "#navigation.success.dashboard"
+
+
+class TestAddWorkflowsToMachine:
+    def _make_parallel_machine(self):
+        return {
+            "id": "appFlow",
+            "type": "parallel",
+            "context": {"user": None, "errors": [], "retryCount": 0, "previousState": None},
+            "states": {
+                "navigation": {
+                    "initial": "app_idle",
+                    "states": {
+                        "app_idle": {"entry": [], "exit": [], "on": {}},
+                    },
+                },
+                "active_workflows": {
+                    "initial": "none",
+                    "states": {"none": {}},
+                },
+            },
+        }
+
+    def test_adds_workflow_to_active_workflows(self):
+        machine = self._make_parallel_machine()
+        workflows = [
+            {
+                "id": "benchmark_workflow",
+                "name": "Benchmark Comparison",
+                "steps": ["discovery", "viewing"],
+                "cross_page_events": ["VIEW_DETAILS"],
+                "completion_events": ["COMPLETED"],
+            }
+        ]
+        add_workflows_to_machine(machine, workflows)
+        assert "benchmark_workflow" in machine["states"]["active_workflows"]["states"]
+
+    def test_workflow_has_compound_state_structure(self):
+        machine = self._make_parallel_machine()
+        workflows = [
+            {
+                "id": "benchmark_workflow",
+                "name": "Benchmark Comparison",
+                "steps": ["discovery", "viewing"],
+                "cross_page_events": ["VIEW_DETAILS"],
+                "completion_events": ["COMPLETED"],
+            }
+        ]
+        add_workflows_to_machine(machine, workflows)
+        wf = machine["states"]["active_workflows"]["states"]["benchmark_workflow"]
+        assert wf["initial"] == "discovery"
+        assert "discovery" in wf["states"]
+        assert "viewing" in wf["states"]
+
+    def test_multiple_workflows(self):
+        machine = self._make_parallel_machine()
+        workflows = [
+            {
+                "id": "benchmark_workflow",
+                "name": "Benchmark",
+                "steps": ["discovery"],
+                "cross_page_events": [],
+                "completion_events": ["COMPLETED"],
+            },
+            {
+                "id": "purchase_group_workflow",
+                "name": "Purchase Group",
+                "steps": ["browsing", "joining"],
+                "cross_page_events": ["JOIN_GROUP"],
+                "completion_events": ["COMPLETED"],
+            },
+        ]
+        add_workflows_to_machine(machine, workflows)
+        aw = machine["states"]["active_workflows"]["states"]
+        assert "benchmark_workflow" in aw
+        assert "purchase_group_workflow" in aw
+
+    def test_no_active_workflows_branch(self):
+        machine = {
+            "id": "appFlow",
+            "initial": "app_idle",
+            "states": {"app_idle": {"entry": [], "exit": [], "on": {}}},
+        }
+        workflows = [
+            {
+                "id": "benchmark_workflow",
+                "name": "Benchmark",
+                "steps": ["discovery"],
+                "cross_page_events": [],
+                "completion_events": ["COMPLETED"],
+            }
+        ]
+        # Should not raise, just does nothing
+        add_workflows_to_machine(machine, workflows)
+        assert "benchmark_workflow" not in machine["states"]
