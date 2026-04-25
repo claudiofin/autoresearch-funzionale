@@ -21,6 +21,122 @@ from collections import deque
 
 
 # =============================================================================
+# DOMAIN CONFIGURATION — All hardcoded patterns extracted for universalization
+# =============================================================================
+
+# STRUCTURAL: Default state names — override via generate_base_machine(app_type=...)
+DEFAULT_STATE_NAMES = {
+    "initial": "app_idle",           # U1: stato iniziale (era hardcoded "app_idle")
+    "workflow_none": "none",         # U2: stato "nessun workflow" (era hardcoded "none")
+    "loading": "loading",            # sottostato di caricamento
+    "ready": "ready",                # sottostato pronto
+    "error": "error",                # sottostato errore
+}
+
+# STRUCTURAL: Default branch names — override via generate_base_machine(branch_names=...)
+DEFAULT_BRANCH_NAMES = {
+    "navigation": "navigation",      # U3: branch navigazione (era hardcoded)
+    "workflows": "workflows",        # U3: branch workflow (era hardcoded "workflows"/"active_workflows")
+}
+
+# STRUCTURAL: Default event names — override via compile_machine(event_names=...)
+DEFAULT_EVENT_NAMES = {
+    "go_back": "GO_BACK",            # U4: evento torna indietro
+    "cancel": "CANCEL",              # U4: evento annulla
+    "retry": "RETRY",                # U4: evento riprova
+    "error": "ERROR",                # U4: evento errore
+    "global_exit": "GLOBAL_EXIT",    # U4: uscita globale da workflow
+    "data_loaded": "DATA_LOADED",    # U4: dati caricati
+    "load_failed": "LOAD_FAILED",    # U4: caricamento fallito
+    "timeout": "TIMEOUT",            # U4: timeout
+}
+
+# STRUCTURAL: Default action names — override via compile_machine(action_names=...)
+DEFAULT_ACTION_NAMES = {
+    "show_loading": "showLoading",           # U5: mostra loading
+    "hide_loading": "hideLoading",           # U5: nascondi loading
+    "log_error": "logError",                 # U5: logga errore
+    "show_error": "showErrorBanner",         # U5: mostra banner errore
+    "hide_error": "hideErrorBanner",         # U5: nascondi banner errore
+    "hide_workflow": "hideWorkflowOverlay",  # U5: nascondi overlay workflow
+    "show_retry": "showRetryModal",          # U5: mostra modale retry
+    "hide_retry": "hideRetryModal",          # U5: nascondi modale retry
+}
+
+
+def _resolve_state_name(name_key: str, overrides: dict = None) -> str:
+    """Resolve a state name using defaults + overrides.
+    
+    STRUCTURAL: Instead of hardcoded names, this looks up the name in
+    DEFAULT_STATE_NAMES and allows runtime overrides.
+    
+    Args:
+        name_key: Key from DEFAULT_STATE_NAMES (e.g., "initial", "workflow_none")
+        overrides: Optional dict of custom names
+    
+    Returns:
+        The resolved state name
+    """
+    if overrides and name_key in overrides:
+        return overrides[name_key]
+    return DEFAULT_STATE_NAMES.get(name_key, name_key)
+
+
+def _resolve_branch_name(branch_key: str, overrides: dict = None) -> str:
+    """Resolve a branch name using defaults + overrides.
+    
+    STRUCTURAL: Instead of hardcoded branch names, this looks up the name in
+    DEFAULT_BRANCH_NAMES and allows runtime overrides.
+    
+    Args:
+        branch_key: Key from DEFAULT_BRANCH_NAMES (e.g., "navigation", "workflows")
+        overrides: Optional dict of custom branch names
+    
+    Returns:
+        The resolved branch name
+    """
+    if overrides and branch_key in overrides:
+        return overrides[branch_key]
+    return DEFAULT_BRANCH_NAMES.get(branch_key, branch_key)
+
+
+def _resolve_event_name(event_key: str, overrides: dict = None) -> str:
+    """Resolve an event name using defaults + overrides.
+    
+    STRUCTURAL: Instead of hardcoded event names, this looks up the name in
+    DEFAULT_EVENT_NAMES and allows runtime overrides.
+    
+    Args:
+        event_key: Key from DEFAULT_EVENT_NAMES (e.g., "go_back", "cancel")
+        overrides: Optional dict of custom event names
+    
+    Returns:
+        The resolved event name
+    """
+    if overrides and event_key in overrides:
+        return overrides[event_key]
+    return DEFAULT_EVENT_NAMES.get(event_key, event_key)
+
+
+def _resolve_action_name(action_key: str, overrides: dict = None) -> str:
+    """Resolve an action name using defaults + overrides.
+    
+    STRUCTURAL: Instead of hardcoded action names, this looks up the name in
+    DEFAULT_ACTION_NAMES and allows runtime overrides.
+    
+    Args:
+        action_key: Key from DEFAULT_ACTION_NAMES (e.g., "show_loading", "log_error")
+        overrides: Optional dict of custom action names
+    
+    Returns:
+        The resolved action name
+    """
+    if overrides and action_key in overrides:
+        return overrides[action_key]
+    return DEFAULT_ACTION_NAMES.get(action_key, action_key)
+
+
+# =============================================================================
 # Rule 2: Canonical Target Resolution
 # =============================================================================
 
@@ -597,15 +713,27 @@ def _format_xstate_actions(actions_list: list, custom_map: dict = None) -> list:
     return formatted
 
 
-def generate_base_machine(use_parallel: bool = True) -> dict:
+def generate_base_machine(use_parallel: bool = True, state_names: dict = None, branch_names: dict = None) -> dict:
     """Generate an empty base state machine with proper parallel structure.
+    
+    STRUCTURAL: Uses configurable state and branch names instead of hardcoded values.
+    This makes the builder universal — works for e-commerce, IoT, social, gaming, etc.
     
     Args:
         use_parallel: If True, creates parallel states architecture
+        state_names: Optional dict overriding DEFAULT_STATE_NAMES (e.g., {"initial": "home"})
+        branch_names: Optional dict overriding DEFAULT_BRANCH_NAMES (e.g., {"navigation": "ui"})
     
     Returns:
         Base machine dict
     """
+    # Resolve names using defaults + overrides
+    initial_name = _resolve_state_name("initial", state_names)
+    workflow_none = _resolve_state_name("workflow_none", state_names)
+    nav_branch = _resolve_branch_name("navigation", branch_names)
+    wf_branch = _resolve_branch_name("workflows", branch_names)
+    hide_workflow = _resolve_action_name("hide_workflow")
+    
     if use_parallel:
         return {
             "id": "appFlow",
@@ -617,19 +745,19 @@ def generate_base_machine(use_parallel: bool = True) -> dict:
                 "previousState": None
             },
             "states": {
-                "navigation": {
+                nav_branch: {
                     "id": "nav_branch",
-                    "initial": "app_idle",
+                    "initial": initial_name,
                     "on": {},
                     "states": {}
                 },
-                "workflows": {
+                wf_branch: {
                     "id": "wf_branch",
-                    "initial": "none",
+                    "initial": workflow_none,
                     "on": {},
                     "states": {
-                        "none": {
-                            "entry": ["hideWorkflowOverlay"],
+                        workflow_none: {
+                            "entry": [hide_workflow],
                             "exit": [],
                             "on": {}
                         }
@@ -640,7 +768,7 @@ def generate_base_machine(use_parallel: bool = True) -> dict:
     else:
         return {
             "id": "appFlow",
-            "initial": "app_idle",
+            "initial": initial_name,
             "context": {
                 "user": None,
                 "errors": [],

@@ -80,33 +80,43 @@ Rules:
 1. 100% valid JSON - no text outside
 2. snake_case for states, UPPER_CASE for events
 3. Use CONSOLIDATED events: ON_SUCCESS, ON_ERROR, CANCEL (not multiple variants like DATA_LOADED, DATA_FETCHED, FETCH_ERROR, etc.)
-4. ON_SUCCESS transition: use guard "hasData" to go to "success" if data exists, otherwise to "empty"
+4. ON_SUCCESS transition: use guard "hasData" to go to the main content state if data exists, otherwise to an empty state
 5. ON_ERROR transition: single event for all error types (network, timeout, server error)
-6. CANCEL transition: use guard "hasPreviousState" to return to previous state (e.g., success during refresh), otherwise to app_idle
+6. CANCEL transition: use guard "hasPreviousState" to return to previous state, otherwise to the initial state
 7. RETRY_FETCH in error state: MUST have guard "canRetry" (context.retryCount < 3)
 8. When retry fails, use assign action to increment retryCount
-9. After 3 failed retries, transition to "session_expired" or "max_retries_exceeded" state
+9. After 3 failed retries, transition to a session_expired or max_retries_exceeded state
 10. Cover: auth, core flow, error handling, empty states
-11. Initial state: app_idle (MUST exist)
+11. INITIAL STATE: Choose an appropriate name from the app context.
+    - Analyze the project description to identify the natural starting point.
+    - Examples: "browse_home", "device_standby", "feed_view", "main_menu", "patient_login", "dashboard", "home", etc.
+    - The initial state MUST exist, MUST be a resting state (no automatic actions in entry),
+      and MUST listen for a START event (e.g., START_APP, INIT, START_GAME, CONNECT, etc.) that triggers initial setup.
+    - All states must be reachable from this initial state.
 12. Every state must have at least one exit transition (no dead-end)
-13. All states must be reachable from app_idle
-14. HIERARCHICAL STATES: The "success" state MUST be hierarchical (nested). Analyze the project context and create a sub-state for each main area/screen of the app (e.g., for e-commerce: catalog, cart, profile). Each sub-state should have navigation events to other sub-states (e.g., NAVIGATE_CATALOG, NAVIGATE_PROFILE). This allows the UI generator to create separate screen files for each area.
+13. All states must be reachable from the initial state
+14. HIERARCHICAL STATES: The main CONTENT state (name it based on context: "success", "dashboard", "feed", "connected", etc.)
+    MUST be hierarchical (nested). Analyze the project context and create a sub-state for each main area/screen of the app.
+    - Identify all main screens/areas from the project description.
+    - Create a sub-state for each one (e.g., catalog, cart, profile, devices, rooms, feed, messages, etc.).
+    - Each sub-state should have navigation events to other sub-states.
+    This allows the UI generator to create separate screen files for each area.
 
 15. NO DUPLICATE STATES: Never create two sets of states for the same screens.
-    If you create "dashboard", "settings", "profile" as sub-states of "success",
-    DO NOT also create "success_dashboard", "success_settings", "success_profile".
+    If you create states as sub-states of the main content state,
+    DO NOT also create prefixed versions (e.g., "success_dashboard", "feed_profile").
     Use ONLY the short names. Each screen = exactly ONE state.
 
-16. app_idle IS A RESTING STATE — use START_APP event:
-    DO NOT put checkAuth, validateCredentials, or any automatic action in app_idle's "entry".
-    Instead, app_idle MUST listen for a "START_APP" event that triggers initial setup:
-      "on": {{ "START_APP": "authenticating" }}
-    The UI layer is responsible for firing START_APP when the app is ready.
-    This prevents infinite loops: app_idle → checkAuth fails → login → cancel → app_idle → ...
+16. INITIAL STATE IS A RESTING STATE — use a START event:
+    DO NOT put automatic actions (checkAuth, validateCredentials, connectDevice, etc.) in the initial state's "entry".
+    Instead, the initial state MUST listen for a START event that triggers initial setup:
+      "on": {{ "START_APP": "authenticating" }}  (or INIT, START_GAME, CONNECT, etc. — choose appropriate name)
+    The UI layer is responsible for firing the START event when the app is ready.
+    This prevents infinite loops: initial → auto-action fails → error → cancel → initial → ...
 
 17. COMPLEX OPERATIONS MUST BE SUB-STATES with error exit:
     If a page has complex background processing or data calculation,
-    it MUST be a sub-state of that page (e.g., success.dashboard.data_processing).
+    it MUST be a sub-state of that page (e.g., dashboard.benchmark.calculating).
     
     CRITICAL: Every nested sub-state MUST define an exit path to "error".
     Either inherit from parent or define explicitly:

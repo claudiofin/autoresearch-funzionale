@@ -57,23 +57,28 @@ def _extract_targets(target) -> list:
 
 
 def _suggest_exit_transitions(state_name: str) -> str:
-    """Suggest exit transitions based on state name pattern."""
+    """Suggest exit transitions based on state name pattern.
+    
+    Suggestions are DOMAIN-AGNOSTIC — they describe the PATTERN, not specific state names.
+    """
     name = state_name.lower()
     
     if "error" in name or "fail" in name:
-        return "Add: RETRY → loading state, CANCEL → initial state"
-    elif "loading" in name:
+        return "Add: RETRY → a loading/retry state, CANCEL → initial/resting state"
+    elif "loading" in name or "connect" in name or "fetch" in name:
         return "Add: CANCEL → previous state, TIMEOUT → error state"
-    elif "empty" in name:
+    elif "empty" in name or "no_data" in name or "no_results" in name:
         return "Add: REFRESH → loading state, GO_BACK → initial state"
     elif "timeout" in name:
         return "Add: RETRY → loading state, CANCEL → initial state"
-    elif "session" in name or "auth" in name:
+    elif "session" in name or "auth" in name or "login" in name:
         return "Add: REAUTHENTICATE → loading state, EXIT → initial state"
-    elif "handler" in name:
-        return "Add: RETRY → parent state, CANCEL → workflow none"
+    elif "handler" in name or "processor" in name:
+        return "Add: RETRY → parent state, CANCEL → workflow idle state"
+    elif "idle" in name or "none" in name or "standby" in name:
+        return "This appears to be an idle/none state — it should have a START event to begin a workflow"
     else:
-        return "Add at least one appropriate exit transition"
+        return "Add at least one appropriate exit transition (GO_BACK, CANCEL, or a domain-specific event)"
 
 
 def _collect_all_states_recursive(states: dict, prefix: str = "") -> dict:

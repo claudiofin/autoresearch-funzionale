@@ -197,33 +197,43 @@ Rules:
 1. 100% valid JSON - no text outside
 2. snake_case for states, UPPER_CASE for events
 3. Use CONSOLIDATED events: ON_SUCCESS, ON_ERROR, CANCEL (not multiple variants like DATA_LOADED, DATA_FETCHED, FETCH_ERROR, etc.)
-4. ON_SUCCESS transition: use guard "hasData" to go to "success" if data exists, otherwise to "empty"
+4. ON_SUCCESS transition: use guard "hasData" to go to the main content state if data exists, otherwise to an empty state
 5. ON_ERROR transition: single event for all error types (network, timeout, server error)
-6. CANCEL transition: use guard "hasPreviousState" to return to previous state (e.g., success during refresh), otherwise to app_idle
+6. CANCEL transition: use guard "hasPreviousState" to return to previous state, otherwise to the initial state
 7. RETRY_FETCH in error state: MUST have guard "canRetry" (context.retryCount < 3)
 8. When retry fails, use assign action to increment retryCount
-9. After 3 failed retries, transition to "session_expired" or "max_retries_exceeded" state
+9. After 3 failed retries, transition to a session_expired or max_retries_exceeded state
 10. Cover: auth, core flow, error handling, empty states
-11. Initial state: app_idle (MUST exist)
+11. INITIAL STATE: Choose an appropriate name from the app context.
+    - Analyze the project description to identify the natural starting point.
+    - Examples: "browse_home", "device_standby", "feed_view", "main_menu", "patient_login", "dashboard", "home", etc.
+    - The initial state MUST exist, MUST be a resting state (no automatic actions in entry),
+      and MUST listen for a START event (e.g., START_APP, INIT, START_GAME, CONNECT, etc.) that triggers initial setup.
+    - All states must be reachable from this initial state.
 12. Every state must have at least one exit transition (no dead-end)
-13. All states must be reachable from app_idle
-14. HIERARCHICAL STATES: The "success" state MUST be hierarchical (nested). Analyze the project context and create a sub-state for each main area/screen of the app (e.g., for e-commerce: catalog, cart, profile; for some app: dashboard, catalog, offers, benchmark, groups). Each sub-state should have navigation events to other sub-states (e.g., NAVIGATE_CATALOG, NAVIGATE_OFFERS). This allows the UI generator to create separate screen files for each area.
+13. All states must be reachable from the initial state
+14. HIERARCHICAL STATES: The main CONTENT state (name it based on context: "success", "dashboard", "feed", "connected", etc.)
+    MUST be hierarchical (nested). Analyze the project context and create a sub-state for each main area/screen of the app.
+    - Identify all main screens/areas from the project description.
+    - Create a sub-state for each one (e.g., catalog, cart, profile, devices, rooms, feed, messages, etc.).
+    - Each sub-state should have navigation events to other sub-states.
+    This allows the UI generator to create separate screen files for each area.
 
 15. NO DUPLICATE STATES: Never create two sets of states for the same screens.
-    If you create "dashboard", "catalog", "offers" as sub-states of "success",
-    DO NOT also create "success_dashboard", "success_catalog", "success_offerte".
+    If you create states as sub-states of the main content state,
+    DO NOT also create prefixed versions (e.g., "success_dashboard", "feed_profile").
     Use ONLY the short names. Each screen = exactly ONE state.
 
-16. app_idle IS A RESTING STATE — use START_APP event:
-    DO NOT put checkAuth, validateCredentials, or any automatic action in app_idle's "entry".
-    Instead, app_idle MUST listen for a "START_APP" event that triggers initial setup:
-      "on": { "START_APP": "authenticating" }
-    The UI layer is responsible for firing START_APP when the app is ready.
-    This prevents infinite loops: app_idle → checkAuth fails → login → cancel → app_idle → ...
+16. INITIAL STATE IS A RESTING STATE — use a START event:
+    DO NOT put automatic actions (checkAuth, validateCredentials, connectDevice, etc.) in the initial state's "entry".
+    Instead, the initial state MUST listen for a START event that triggers initial setup:
+      "on": { "START_APP": "authenticating" }  (or INIT, START_GAME, CONNECT, etc. — choose appropriate name)
+    The UI layer is responsible for firing the START event when the app is ready.
+    This prevents infinite loops: initial → auto-action fails → error → cancel → initial → ...
 
-17. CLUSTERING MUST BE A SUB-STATE with error exit:
-    If the app has a "clustering" or "calculation" feature inside a page (e.g., Benchmark),
-    it MUST be a sub-state of that page: success.benchmark.clustering_calculation.
+17. CLUSTERING/CALCULATION MUST BE A SUB-STATE with error exit:
+    If the app has a "clustering" or "calculation" feature inside a page,
+    it MUST be a sub-state of that page (e.g., dashboard.benchmark.calculating).
     
     CRITICAL: Every nested sub-state MUST define an exit path to "error".
     Either inherit from parent or define explicitly:
@@ -234,12 +244,12 @@ Rules:
     The "context" object MUST include a "previousState" field:
       "context": {"user": null, "errors": [], "retryCount": 0, "previousState": null}
     
-    When transitioning FROM success TO loading (e.g., via REFRESH_DATA),
+    When transitioning FROM content TO loading (e.g., via REFRESH_DATA),
     the loading state's "entry" MUST include an action to save the previous state:
       "entry": ["showSkeleton", "setPreviousState"]
     
     The guard "hasPreviousState" checks: context.previousState !== null
-    This allows CANCEL to return to success (during refresh) or app_idle (first load).
+    This allows CANCEL to return to content (during refresh) or initial state (first load).
 
 19. RETRY_FETCH MUST increment retryCount:
     The transition from error to loading via RETRY_FETCH MUST include the action:
@@ -249,91 +259,63 @@ Rules:
     Without this action, retryCount stays at 0 and the user can retry infinitely.
 
 20. EVENT NAMING: Use ENGLISH for all event names (standardize on English).
-    - Use NAVIGATE_CATALOG (not NAVIGATE_CATALOGO)
-    - Use NAVIGATE_OFFERS (not NAVIGATE_OFFERTE)
-    - Use NAVIGATE_GROUPS (not NAVIGATE_GRUPPI)
-    - Event names are code identifiers — keep them in English.
-    - Comments and descriptions can be in Italian.
+    Event names are code identifiers — keep them in English.
+    Comments and descriptions can be in Italian.
 
 21. MICRO-OPERATIONS AND INTERNAL TRANSITIONS (BUSINESS LOGIC):
     Ensure that each sub-state does NOT ONLY contain navigation events (NAVIGATE_*).
     You MUST include data manipulation events (micro-operations) as internal transitions or transitions to child states.
-    Examples for a generic app (e.g., e-commerce or social):
-    - In a list/feed state: include "APPLY_FILTER", "LOAD_MORE", or "SEARCH" with appropriate "actions" like ["updateSearchFilters"].
-    - In a detail state: include "LIKE_ITEM", "DELETE_ITEM", or "ADD_TO_CART" with actions like ["updateItemStatus"].
+    Examples:
+    - In a list/feed state: include "APPLY_FILTER", "LOAD_MORE", or "SEARCH" with appropriate "actions".
+    - In a detail state: include actions like "updateItemStatus", "updateDeviceState", "updatePlayerScore".
     - In a form/modal state: include "SUBMIT_DATA" or "CANCEL_EDIT" with actions and/or targets.
     Without these, the application has no business logic and only acts as an empty navigation shell!
 
 22. PARALLEL STATES ARCHITECTURE (NEW - CRITICAL FOR WORKFLOWS):
     The root state machine MUST use type: "parallel" with TWO branches:
     
-    Branch 1 - "navigation": tracks which PAGE the user is physically on
-      - Contains: app_idle, authenticating, loading, success (with sub-states), empty, error, session_expired
-      - This is the EXISTING navigation structure you already generate
+    Branch 1 - NAVIGATION branch (name it based on context: "navigation", "ui", "screens", etc.):
+      - Tracks which PAGE the user is physically on
+      - Contains: initial state, authenticating/connecting, loading, content (with sub-states), empty, error, session_expired
+      - The initial state name comes from Rule 11
     
-    Branch 2 - "active_workflows": tracks which WORKFLOW is currently active
-      - initial: "none"
+    Branch 2 - WORKFLOWS branch (name it based on context: "workflows", "active_workflows", "tasks", "device_workflows", etc.):
+      - initial: a "none/idle/standby" state (choose appropriate name for the domain)
       - Contains compound states for each workflow identified from the context
       - Each workflow compound state has its own internal micro-states
-      - EVERY workflow MUST have a completion event that returns to "none"
+      - EVERY workflow MUST have a completion event that returns to the "none" state
     
-    Example root structure:
+    Example root structure (adapt names to your domain):
     {
       "id": "appFlow",
       "type": "parallel",
       "states": {
         "navigation": {
-          "initial": "app_idle",
-          "states": { /* existing navigation states */ }
+          "initial": "<initial_state_name_from_rule_11>",
+          "states": { /* navigation states */ }
         },
-        "active_workflows": {
-          "initial": "none",
+        "workflows": {
+          "initial": "<none_or_idle_state_name>",
           "states": {
-            "none": {},
-            "benchmark_workflow": {
-              "initial": "discovery",
+            "<none_state>": {},
+            "<workflow_id>_workflow": {
+              "initial": "<first_step>",
               "states": {
-                "discovery": {
-                  "entry": ["showBenchmarkOverlay"],
-                  "on": { "VIEW_DETAILS": "viewing", "GO_BACK": "none" }
+                "<step1>": {
+                  "entry": ["show<Step1>"],
+                  "on": { "NEXT": "<step2>", "GO_BACK": "<none_state>" }
                 },
-                "viewing": {
-                  "entry": ["showPriceComparison"],
-                  "on": { "JOIN_GROUP": "joining", "GO_BACK": "discovery" }
+                "<step2>": {
+                  "entry": ["show<Step2>"],
+                  "on": { "NEXT": "<step3>", "GO_BACK": "<step1>", "CANCEL": "<step1>" }
                 },
-                "joining": {
-                  "entry": ["showJoinConfirmation"],
-                  "on": { "CONFIRM_JOIN": "tracking", "CANCEL": "viewing" }
-                },
-                "tracking": {
-                  "entry": ["showGroupProgress"],
-                  "on": { "GROUP_COMPLETE": "none", "GO_BACK": "discovery" }
+                "<step3>": {
+                  "entry": ["show<Step3>"],
+                  "on": { "COMPLETE": "<none_state>", "GO_BACK": "<step2>" }
                 }
               },
               "on": {
-                "NAVIGATE_DASHBOARD": "#navigation.success.dashboard",
-                "NAVIGATE_CATALOG": "#navigation.success.catalog"
-              }
-            },
-            "purchase_group_workflow": {
-              "initial": "browsing",
-              "states": {
-                "browsing": {
-                  "entry": ["showGroupCatalog"],
-                  "on": { "SELECT_GROUP": "confirming", "GO_BACK": "none" }
-                },
-                "confirming": {
-                  "entry": ["showJoinModal"],
-                  "on": { "CONFIRM_JOIN": "tracking", "CANCEL": "browsing" }
-                },
-                "tracking": {
-                  "entry": ["showGroupTracking"],
-                  "on": { "GROUP_COMPLETE": "none", "GO_BACK": "browsing" }
-                }
-              },
-              "on": {
-                "NAVIGATE_DASHBOARD": "#navigation.success.dashboard",
-                "NAVIGATE_CATALOG": "#navigation.success.catalog"
+                "NAVIGATE_<PAGE>": "#navigation.<content_state>.<page>"
               }
             }
           }
@@ -343,18 +325,16 @@ Rules:
 
 23. WORKFLOW IDENTIFICATION RULES:
     Identify workflows from the INPUT CONTEXT by looking for:
-    - VERBS OF ACTION: partecipare, confrontare, ricevere, unirsi, monitorare, vedere, scoprire
+    - VERBS OF ACTION: participate, compare, receive, join, monitor, view, discover (or Italian equivalents)
     - MULTI-STEP PROCESSES: anything that spans multiple screens
-    - USER JOURNEYS: "voglio vedere se risparmio" = benchmark_workflow
-    - "gruppi d'acquisto" = purchase_group_workflow
-    - "alert prezzi" = price_alert_workflow
+    - USER JOURNEYS: multi-step user goals
     
     For each workflow:
     - Give it a unique id (snake_case) ending with "_workflow"
     - Define 3-5 internal steps (micro-states)
     - Each step MUST have entry actions and transitions
     - EVERY step MUST have a GO_BACK or CANCEL transition
-    - The LAST step MUST have a completion event (COMPLETED, CANCELLED, DISMISSED) → "none"
+    - The LAST step MUST have a completion event (COMPLETED, CANCELLED, DISMISSED) → the "none" state
 
 24. WORKFLOW-TO-PAGE CONNECTIONS:
     Workflows can be triggered FROM pages and can navigate BACK to pages:
