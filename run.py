@@ -246,6 +246,27 @@ Examples:
     kanban_parser.add_argument("--force", action="store_true",
                                help="Overwrite existing kanban_tasks directory")
 
+    # ─── WIKI GENERATOR ───
+    wiki_parser = subparsers.add_parser(
+        "wiki-generator",
+        help="Generate LLM Wiki (Memory Bank) for AI agents",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    python run.py wiki-generator
+    python run.py wiki-generator --force
+    python run.py wiki-generator --context output/context/project_context.md
+        """
+    )
+    wiki_parser.add_argument("--context", type=str, default="output/context/project_context.md",
+                             help="Path al file project_context.md")
+    wiki_parser.add_argument("--output-dir", type=str, default="output/llm_wiki",
+                             help="Directory di output per la LLM Wiki")
+    wiki_parser.add_argument("--base-output-dir", type=str, default="output",
+                             help="Directory base da scansionare per l'indice")
+    wiki_parser.add_argument("--force", action="store_true",
+                             help="Force regeneration of existing files")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -386,6 +407,17 @@ Examples:
         if args.force_design:
             sys.argv.append("--force-design")
         ui_main()
+
+    # ─── WIKI GENERATOR ───
+    elif args.command == "wiki-generator":
+        from pipeline.wiki_generator import main as wiki_main  # type: ignore
+        sys.argv = ["wiki-generator",
+                    "--context", args.context,
+                    "--output-dir", args.output_dir,
+                    "--base-output-dir", args.base_output_dir]
+        if args.force:
+            sys.argv.append("--force")
+        wiki_main()
 
     # ─── KANBAN TASK ───
     elif args.command == "kanban-task":

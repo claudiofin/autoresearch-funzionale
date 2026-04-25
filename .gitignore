@@ -38,6 +38,7 @@ output/ui_specs/
 output/backend/
 output/ci_cd/
 output/kanban_tasks/
+output/llm_wiki/
 # Legacy generated files (from old runs)
 project_context.md
 spec.md

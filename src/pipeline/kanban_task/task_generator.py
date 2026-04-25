@@ -99,6 +99,10 @@ Devi analizzare tutta la documentazione tecnica del progetto e pianificare lo sv
 3. **Parallelizzazione (Multi-Agente):** Specifica quali task dentro lo stesso Sprint possono essere assegnati contemporaneamente a più agenti AI senza creare conflitti.
 4. **Scope iper-limitato:** Un task non deve superare i 10-15 minuti di elaborazione AI. Se un task è troppo grande, scomponilo.
 5. **Contesto esplicito:** Ogni task deve indicare quali file leggere prima di iniziare.
+6. **LLM Wiki Obbligatoria:** Ogni task DEVE avere questi file all'inizio dell'array "files_to_read":
+   - "output/llm_wiki/@TECH_RULES.md"
+   - "output/llm_wiki/project_index.md"
+   È OBBLIGATORIO. L'agente AI deve leggere queste regole prima di scrivere qualsiasi codice.
 
 ## Documentazione del Progetto:
 {context}
@@ -347,8 +351,13 @@ def generate_task_markdown(task: dict, sprint_number: int, sprint_goal: str) -> 
     can_parallelize = task.get("can_be_parallelized", False)
     parallel_group = task.get("parallel_group")
     
-    # Files to read
-    files_str = "\n".join([f"- `{f}`" for f in files_to_read]) if files_to_read else "- Nessuno specifico"
+    # Files to read - aggiungi header LLM Wiki se presente
+    wiki_files = [f for f in files_to_read if "llm_wiki" in f]
+    if wiki_files:
+        wiki_header = "🧠 **LLM Wiki (Memory Bank):** Questi file contengono le regole tecniche assolute del progetto. LEGGILI PRIMA DI CODARE.\n\n"
+        files_str = wiki_header + "\n".join([f"- `{f}`" for f in files_to_read])
+    else:
+        files_str = "\n".join([f"- `{f}`" for f in files_to_read]) if files_to_read else "- Nessuno specifico"
     
     # Acceptance criteria
     ac_str = "\n".join([f"- [ ] {ac}" for ac in acceptance_criteria]) if acceptance_criteria else "- [ ] Verificare che il task sia completato"
