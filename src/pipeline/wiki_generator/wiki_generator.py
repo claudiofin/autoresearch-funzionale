@@ -1,9 +1,10 @@
 """
 LLM Wiki Generator - Crea la Memory Bank per gli Agenti AI.
 
-Genera 4 file fondamentali dentro output/llm_wiki/:
+Genera 5 file fondamentali dentro output/llm_wiki/:
 - @TECH_RULES.md       (Regole tecniche assolute, stack, divieti)
 - @DOMAIN_GLOSSARY.md  (Vocabolario del dominio aziendale)
+- @SECURITY_RULES.md   (Regole di sicurezza, threat model, compliance)
 - project_index.md     (Indice navigabile di tutti i file)
 - active_context.md    (Log di sviluppo, aggiornato dall'agente)
 
@@ -44,6 +45,24 @@ Analizza il contesto e crea una tabella Markdown con:
 - **Descrizione** (1 riga)
 
 Sii coerente con la nomenclatura già usata nel progetto.
+
+## Contesto del Progetto:
+{context}
+"""
+
+PROMPT_SECURITY_RULES = """Sei un Senior Security Architect. Ho questo contesto di progetto e le relative specifiche di sicurezza.
+Devo istruire un team di Agenti AI (Junior/Mid Developers) a scrivere codice sicuro.
+
+Crea un file di regole di sicurezza contenente:
+1. **REGOLE ASSOLUTE DI SICUREZZA** (cosa NON fare mai - input validation, SQL injection, XSS, etc.)
+2. **Autenticazione e Autorizzazione** (come gestire sessioni, token, permessi)
+3. **Protezione Dati** (crittografia, PII, data handling)
+4. **API Security** (rate limiting, CORS, input sanitization)
+5. **Compliance** (GDPR, HIPAA, o altri framework rilevanti per il dominio)
+6. **Security Checklist** (cosa verificare prima di ogni deploy)
+
+Sii telegrafico. Usa elenchi puntati. Non scrivere paragrafi discorsivi.
+Usa emoji per categorizzare: 🔐 Auth, 🛡️ Data, 🚫 Proibito, ✅ Obbligatorio, ⚠️ Attenzione.
 
 ## Contesto del Progetto:
 {context}
@@ -154,6 +173,28 @@ def generate_domain_glossary(context: str, output_dir: str, force: bool = False)
                 f"{content}\n")
     
     print(f"  ✅ @DOMAIN_GLOSSARY.md generato ({len(content)} chars)")
+    return output_path
+
+
+def generate_security_rules(context: str, output_dir: str, force: bool = False) -> str:
+    """Genera @SECURITY_RULES.md con le regole di sicurezza del progetto."""
+    output_path = os.path.join(output_dir, "@SECURITY_RULES.md")
+    
+    if os.path.exists(output_path) and not force:
+        print(f"  ⏭️  @SECURITY_RULES.md già esiste, salto (usa --force per rigenerare)")
+        return output_path
+    
+    print("  🔐 Generazione @SECURITY_RULES.md...")
+    prompt = PROMPT_SECURITY_RULES.format(context=context[:6000])
+    content = _call_llm_for_wiki(prompt)
+    
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(f"# 🔐 Security Rules & Guidelines\n\n"
+                f"> Generato automaticamente dalla pipeline LLM Wiki.\n"
+                f"> Questo file contiene le regole di sicurezza assolute del progetto.\n\n"
+                f"{content}\n")
+    
+    print(f"  ✅ @SECURITY_RULES.md generato ({len(content)} chars)")
     return output_path
 
 
@@ -270,10 +311,11 @@ def generate_wiki(context_path: str = "output/context/project_context.md",
     context = _load_context(context_path)
     print(f"  ✅ Contesto caricato ({len(context)} chars)")
     
-    # Genera i 4 file
+    # Genera i 5 file
     results = {}
     results["tech_rules"] = generate_tech_rules(context, output_dir, force)
     results["domain_glossary"] = generate_domain_glossary(context, output_dir, force)
+    results["security_rules"] = generate_security_rules(context, output_dir, force)
     results["project_index"] = generate_project_index(context, output_dir, base_output_dir)
     results["active_context"] = generate_active_context(output_dir, force)
     

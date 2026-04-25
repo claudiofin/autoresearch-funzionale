@@ -31,6 +31,19 @@ def generate_backend_spec(machine_file: str, context_file: str, output_file: str
     # Build the prompt
     prompt = f"""Analyze this state machine and project context to generate a BACKEND FUNCTIONAL SPECIFICATION.
 
+CRITICAL RULE: You are a pure Software Architect. You must reason in terms of ARCHITECTURAL PATTERNS and PARADIGMS, never specific technologies.
+
+VIOLATION RULES (STRICT):
+- NEVER mention specific technologies (e.g., "Node.js", "Python", "PostgreSQL", "MongoDB", "AWS", "Convex", "Supabase", "Firebase", "Express", "FastAPI", "GraphQL", "REST", "WebSocket", "gRPC").
+- Instead of technology names, use paradigm descriptions:
+  - Instead of "REST API" → "Request-Response API with resource-oriented operations"
+  - Instead of "GraphQL" → "Declarative query API with client-specified responses"
+  - Instead of "WebSockets" → "Bidirectional real-time communication channel"
+  - Instead of "PostgreSQL" → "Relational database with ACID transactions"
+  - Instead of "MongoDB" → "Document-oriented database with flexible schemas"
+  - Instead of "Redis" → "In-memory key-value store for caching"
+  - Instead of "RabbitMQ" → "Message broker for asynchronous job processing"
+
 ## State Machine (spec_machine.json)
 ```json
 {json.dumps(machine, indent=2)}
@@ -39,52 +52,77 @@ def generate_backend_spec(machine_file: str, context_file: str, output_file: str
 ## Project Context
 {context_text[:5000]}
 
-## Rules for Backend Analysis
+## Rules for Functional Backend Analysis
 
-### 1. STATE-TO-ENDPOINT MAPPING
-Every `loading` state in the machine corresponds to a data-fetching API call.
-Map each loading transition to an endpoint:
-- loading → success.dashboard → GET /api/dashboard
-- loading → success.catalog → GET /api/catalog
-- loading → success.offers → GET /api/offers/active
-- loading → success.benchmark → GET /api/benchmark/cluster
-- loading → success.groups → GET /api/groups/active
+### 1. API PARADIGM SELECTION
+Analyze the state machine and context to determine the most appropriate API paradigm:
+- Request-Response (synchronous request/response pattern for standard CRUD operations)
+- Declarative Query (client specifies exactly what data it needs, server resolves complex queries)
+- RPC-style (direct invocation of server-side operations/actions)
+- Real-time Bidirectional (persistent connection for server-to-client push notifications)
+- Event-Driven (publish/subscribe pattern for decoupled async communication)
 
-### 2. AUTH STATE COHERENCE
-- `authenticating` state → POST /api/auth/login (credentials validation)
-- `session_expired` state → POST /api/auth/refresh (token refresh)
-- Define JWT/OAuth2 token lifecycle: access_token (15min), refresh_token (7d)
+Justify the choice based on:
+- Frequency of data updates (real-time vs on-demand)
+- Complexity of data relationships (simple fetch vs complex joins)
+- Client flexibility needs (fixed response vs custom queries)
+- Server push requirements (notifications, live updates)
 
-### 3. TRANSITION COMMANDS
-Events that are NOT navigation (NAVIGATE_*) are backend commands:
-- JOIN_GROUP → POST /api/groups/join (idempotent check required)
-- CALCULATE_CLUSTER → POST /api/benchmark/calculate (async operation)
-- REFRESH_DATA → GET with cache-busting or ETag
+### 2. DATA MODEL PARADIGM
+Determine the appropriate data storage paradigm based on the domain:
+- Relational (structured data with strict schemas, ACID transactions, complex joins)
+- Document-oriented (flexible schemas, hierarchical data, fast reads)
+- Key-Value (simple lookups, caching, session storage)
+- Time-Series (historical data, analytics, trend analysis)
+- Graph (complex relationships, network analysis, recommendations)
 
-### 4. ASYNC CALCULATION PATTERN
-If a state involves computation (e.g., clustering_calculation):
-- Backend must use Job Queue pattern
-- Client polls GET /api/jobs/{id}/status
-- Timeout: 30s, then fallback to cached data
+Justify based on:
+- Data structure complexity
+- Transaction requirements (ACID vs eventual consistency)
+- Query patterns (point lookups vs complex aggregations)
+- Scalability needs (vertical vs horizontal)
 
-### 5. DATA SCHEMA DERIVATION
-Extract entities from project_context.md:
-- If context mentions "clinics", "purchases", "medicines" → define tables
-- Define relationships (1:N, N:N) based on how data is fetched together
-- Define validation rules from the spec's Data Validation section
+### 3. OPERATIONAL CONTRACTS
+For each state transition that requires backend interaction, define:
+- Operation name and purpose
+- Input parameters (types, constraints, validation rules)
+- Output structure (data shape, success/error states)
+- Side effects (what changes in the system)
+- Idempotency requirements (can it be safely retried?)
 
-### 6. ERROR CONTRACTS
-Map HTTP status codes to state machine states:
-- 401 → session_expired
-- 403 → error (forbidden)
-- 404 → empty (not found)
-- 500 → error (retry with backoff)
-- 503 → error (network unavailable)
+### 4. ASYNCHRONOUS PROCESSING PATTERNS
+Identify operations that cannot be synchronous:
+- Long-running computations (clustering, batch processing)
+- External service calls (email, payment, third-party APIs)
+- Heavy data processing (aggregations, report generation)
 
-### 7. IDEMPOTENCY
-For POST/PATCH/DELETE operations:
-- Define idempotency key strategy (X-Idempotency-Key header)
-- Specify which operations MUST be idempotent (double-tap prevention)
+For each, specify:
+- Pattern: Job Queue, Pub/Sub, Webhook, or Polling
+- Timeout expectations
+- Fallback behavior on failure
+- Progress tracking mechanism
+
+### 5. SECURITY ARCHITECTURE
+Define the security model:
+- Authentication strategy (stateless tokens vs stateful sessions)
+- Authorization model (RBAC, ABAC, or simple role-based)
+- Data isolation (multi-tenancy, row-level security)
+- Rate limiting strategy (per-user, per-endpoint, global)
+- Audit logging requirements
+
+### 6. ERROR HANDLING CONTRACTS
+Map system states to error handling strategies:
+- Transient errors (network timeout, temporary unavailability) → retry with backoff
+- Permanent errors (not found, forbidden) → immediate failure with user guidance
+- Data validation errors → structured error response with field-level details
+- System errors (500) → generic error with request ID for debugging
+
+### 7. CACHING STRATEGY
+Define caching requirements:
+- Which data benefits from caching (frequently read, rarely changed)
+- Cache invalidation strategy (time-based, event-based, manual)
+- Cache scope (client-side, edge/CDN, server-side, database query cache)
+- Consistency requirements (strong vs eventual)
 
 ## Output Format
 
@@ -92,72 +130,83 @@ Respond ONLY with valid Markdown (no code blocks, no extra text):
 
 # Backend Functional Specification
 
-## 1. API Endpoints
+## 1. API Architecture
 
-### 1.1 Authentication
-| Endpoint | Method | Auth Required | Idempotent | Description |
-|----------|--------|---------------|------------|-------------|
-| POST /api/auth/login | POST | No | No | Validate credentials, return JWT pair |
-| POST /api/auth/refresh | POST | Yes (refresh token) | Yes | Exchange refresh token for new access token |
-| POST /api/auth/logout | POST | Yes (access token) | Yes | Invalidate refresh token |
+### 1.1 Paradigm Selection
+[Describe the recommended API paradigm and justify the choice]
 
-### 1.2 Data Fetching (GET)
-| Endpoint | Method | Auth Required | Cache | Description |
-|----------|--------|---------------|-------|-------------|
-| GET /api/dashboard | GET | Yes | 5min | Fetch clinic profile, YTD savings, recent purchases |
-| GET /api/catalog | GET | Yes | 10min | Search medicines with filters |
+### 1.2 Authentication Flow
+| Operation | Input | Output | Auth Required | Idempotent | Description |
+|-----------|-------|--------|---------------|------------|-------------|
+| Login | credentials | session token | No | No | Validate credentials, establish session |
+| Refresh | refresh token | new access token | Yes | Yes | Extend session validity |
+| Logout | session token | confirmation | Yes | Yes | Terminate session |
+
+### 1.3 Data Operations
+| Operation | Input | Output | Cache Strategy | Description |
+|-----------|-------|--------|----------------|-------------|
+| Fetch Dashboard | user_id | dashboard data | 5min TTL | Aggregate clinic profile, savings, recent activity |
+| Search Catalog | filters | paginated results | 10min TTL | Search and filter available items |
 | ...
 
-### 1.3 Commands (POST/PATCH/DELETE)
-| Endpoint | Method | Auth Required | Idempotent | Description |
-|----------|--------|---------------|------------|-------------|
-| POST /api/groups/join | POST | Yes | Yes | Request to join purchase group |
+### 1.4 Command Operations
+| Operation | Input | Output | Idempotent | Description |
+|-----------|-------|--------|------------|-------------|
+| Join Group | group_id, quantity | confirmation | Yes | Request participation in purchase group |
+| Calculate Benchmark | parameters | job_id | Yes | Trigger async clustering calculation |
 | ...
 
-## 2. Async Operations
-| Operation | Pattern | Timeout | Fallback | Polling Interval |
-|-----------|---------|---------|----------|------------------|
-| Clustering Calculation | Job Queue + Polling | 30s | Cached data | 2s |
+## 2. Data Model
 
-## 3. Data Schema
+### 2.1 Paradigm Selection
+[Describe recommended data storage paradigm and justify]
 
-### 3.1 Entities
-- **Clinic**: id (UUID), name, role, active (boolean), created_at
-- **Purchase**: id (UUID), clinic_id (FK), item, quantity, unit_price, date
+### 2.2 Entity Definitions
+- **EntityName**: field (type, constraints), field (type, constraints), ...
 - ...
 
-### 3.2 Relationships
-- Clinic 1:N Purchase
-- Clinic N:N Group (via GroupMembership)
+### 2.3 Relationships
+- EntityA 1:N EntityB (description of relationship)
+- EntityC N:N EntityD (via junction table)
 - ...
 
-## 4. Error Contracts
-| HTTP Status | State | Retryable | User Action |
-|-------------|-------|-----------|-------------|
-| 401 | session_expired | No | Re-authenticate |
-| 403 | error | No | Show forbidden |
-| 404 | empty | No | Show empty state |
-| 500 | error | Yes | Retry with exponential backoff |
-| 503 | error | Yes | Check connection, retry |
+## 3. Asynchronous Processing
 
-## 5. Idempotency Requirements
-| Endpoint | Idempotency Key | Strategy |
-|----------|-----------------|----------|
-| POST /api/groups/join | X-Idempotency-Key | DB unique constraint on (clinic_id, group_id, key) |
-| POST /api/auth/refresh | Token pair | Single-use refresh tokens |
+| Operation | Pattern | Timeout | Fallback | Progress Tracking |
+|-----------|---------|---------|----------|-------------------|
+| Clustering Calculation | Job Queue + Polling | 30s | Cached benchmark data | Poll job status endpoint |
+| ...
 
-## 6. Rate Limiting
-| Endpoint | Limit | Window |
-|----------|-------|--------|
-| POST /api/auth/login | 5 | 15min |
-| GET /api/catalog | 60 | 1min |
-| POST /api/benchmark/calculate | 3 | 10min |
+## 4. Security Architecture
 
-## 7. Security Requirements
-- All GET endpoints require valid access_token in Authorization header
-- POST/PATCH/DELETE require access_token + idempotency key
-- Refresh tokens stored in httpOnly cookie
-- Rate limiting on auth endpoints to prevent brute force
+### 4.1 Authentication
+[Describe auth strategy: stateless vs stateful, token lifecycle, etc.]
+
+### 4.2 Authorization
+[Describe authz model: roles, permissions, data isolation]
+
+### 4.3 Rate Limiting
+| Operation Type | Limit | Window | Action on Exceed |
+|----------------|-------|--------|------------------|
+| Authentication | 5 attempts | 15min | Temporary lockout |
+| Data Queries | 60 requests | 1min | Throttle response |
+
+## 5. Error Handling
+
+| Error Type | Client Action | Retry Strategy | User Guidance |
+|------------|---------------|----------------|---------------|
+| Session Expired | Clear session, re-authenticate | No retry | Redirect to login |
+| Not Found | Show empty state | No retry | Offer refresh/search |
+| Server Error | Show error banner | Exponential backoff (3x) | "Please try again" |
+| Rate Limited | Show warning | Wait for window reset | "Too many requests" |
+
+## 6. Caching Strategy
+
+| Data Type | Cache Level | TTL | Invalidation | Consistency |
+|-----------|-------------|-----|--------------|-------------|
+| Dashboard | Server + Client | 5min | Time-based | Eventual |
+| Catalog | Edge + Server | 10min | Time-based | Eventual |
+| Benchmark | Server | 15min | Event-based (on recalc) | Strong |
 """
     
     print(f"  🤖 Calling LLM for backend spec generation...")

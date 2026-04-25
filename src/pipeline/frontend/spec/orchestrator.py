@@ -10,7 +10,7 @@ import time
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from pipeline.frontend.spec.llm_client import call_llm_spec
-from state_machine.builder import generate_base_machine, build_state_config, add_transitions, normalize_machine
+from state_machine.builder import generate_base_machine, build_state_config, add_transitions, normalize_machine, add_workflows_to_machine
 from state_machine.post_processing import remove_toplevel_duplicates, complete_missing_branches, clean_unreachable_states, validate_no_critical_patterns, create_missing_target_states
 from diagrams.plantuml import generate_plantuml_statechart, generate_plantuml_sequence
 from diagrams.markdown import generate_spec_markdown
@@ -70,6 +70,12 @@ def run_analysis(
         print("   The system cannot work without an LLM.")
         sys.exit(1)
     
+    # Determine if we should use parallel states architecture
+    # Use parallel if: analyst suggested workflows OR existing machine is parallel
+    has_workflows = analyst_suggestions and len(analyst_suggestions.get("workflows", [])) > 0
+    is_existing_parallel = existing_machine and existing_machine.get("type") == "parallel"
+    use_parallel = has_workflows or is_existing_parallel
+    
     # Build machine using modular builder
     machine = None
     
@@ -110,15 +116,32 @@ def run_analysis(
         # Add transitions
         add_transitions(machine, llm_data.get("transitions", []))
     else:
-        # Generate from scratch
-        machine = generate_base_machine()
+        # Generate from scratch with parallel architecture if workflows exist
+        machine = generate_base_machine(use_parallel=use_parallel)
         
-        for state in llm_data.get("states", []):
-            state_name = state["name"]
-            machine["states"][state_name] = build_state_config(state)
-        
-        # Add transitions
-        add_transitions(machine, llm_data.get("transitions", []))
+        if use_parallel:
+            # In parallel mode, states go into navigation branch
+            nav_branch = machine["states"]["navigation"]
+            for state in llm_data.get("states", []):
+                state_name = state["name"]
+                nav_branch["states"][state_name] = build_state_config(state)
+            
+            # Add transitions to navigation branch
+            add_transitions_to_branch(machine, llm_data.get("transitions", []))
+            
+            # Add workflows to active_workflows branch
+            if has_workflows:
+                workflows = analyst_suggestions.get("workflows", [])
+                add_workflows_to_machine(machine, workflows)
+                print(f"  🔄 Added {len(workflows)} workflows to active_workflows branch")
+        else:
+            # Legacy flat mode
+            for state in llm_data.get("states", []):
+                state_name = state["name"]
+                machine["states"][state_name] = build_state_config(state)
+            
+            # Add transitions
+            add_transitions(machine, llm_data.get("transitions", []))
     
     # Normalize machine
     machine = normalize_machine(machine)

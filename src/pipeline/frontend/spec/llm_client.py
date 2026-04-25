@@ -125,6 +125,16 @@ INSTRUCTIONS:
         transitions = analyst_suggestions.get("transitions", [])
         edge_cases = analyst_suggestions.get("edge_cases", [])
         events = analyst_suggestions.get("events", [])
+        workflows = analyst_suggestions.get("workflows", [])
+        
+        workflows_text = ""
+        if workflows:
+            workflows_text = f"""
+- {len(workflows)} suggested workflows: {', '.join(w['id'] for w in workflows[:10])}
+  Workflow details:
+{chr(10).join(f'    * {w["id"]}: {w.get("name", "")} - {w.get("description", "")} (trigger: {w.get("trigger", "")}, steps: {", ".join(w.get("steps", []))})' for w in workflows[:10])}
+"""
+        
         suggestions_section = f"""
 
 ANALYST SUGGESTIONS (YOU MUST INCLUDE THESE):
@@ -132,11 +142,13 @@ ANALYST SUGGESTIONS (YOU MUST INCLUDE THESE):
 - {len(transitions)} suggested transitions
 - {len(edge_cases)} edge cases to handle
 - {len(events)} events to support: {', '.join(e['name'] for e in events[:10])}
-
+{workflows_text}
 REQUIRED ACTIONS:
 1. Add ALL suggested states that don't already exist
 2. Add suggested transitions
 3. Handle edge cases with appropriate error states
+4. For EACH suggested workflow, create a compound state under "active_workflows" with internal micro-states
+5. Each workflow MUST have a completion event that returns to "none"
 """
     
     # Build critic feedback section
@@ -251,6 +263,114 @@ Rules:
     - In a detail state: include "LIKE_ITEM", "DELETE_ITEM", or "ADD_TO_CART" with actions like ["updateItemStatus"].
     - In a form/modal state: include "SUBMIT_DATA" or "CANCEL_EDIT" with actions and/or targets.
     Without these, the application has no business logic and only acts as an empty navigation shell!
+
+22. PARALLEL STATES ARCHITECTURE (NEW - CRITICAL FOR WORKFLOWS):
+    The root state machine MUST use type: "parallel" with TWO branches:
+    
+    Branch 1 - "navigation": tracks which PAGE the user is physically on
+      - Contains: app_idle, authenticating, loading, success (with sub-states), empty, error, session_expired
+      - This is the EXISTING navigation structure you already generate
+    
+    Branch 2 - "active_workflows": tracks which WORKFLOW is currently active
+      - initial: "none"
+      - Contains compound states for each workflow identified from the context
+      - Each workflow compound state has its own internal micro-states
+      - EVERY workflow MUST have a completion event that returns to "none"
+    
+    Example root structure:
+    {
+      "id": "appFlow",
+      "type": "parallel",
+      "states": {
+        "navigation": {
+          "initial": "app_idle",
+          "states": { /* existing navigation states */ }
+        },
+        "active_workflows": {
+          "initial": "none",
+          "states": {
+            "none": {},
+            "benchmark_workflow": {
+              "initial": "discovery",
+              "states": {
+                "discovery": {
+                  "entry": ["showBenchmarkOverlay"],
+                  "on": { "VIEW_DETAILS": "viewing", "GO_BACK": "none" }
+                },
+                "viewing": {
+                  "entry": ["showPriceComparison"],
+                  "on": { "JOIN_GROUP": "joining", "GO_BACK": "discovery" }
+                },
+                "joining": {
+                  "entry": ["showJoinConfirmation"],
+                  "on": { "CONFIRM_JOIN": "tracking", "CANCEL": "viewing" }
+                },
+                "tracking": {
+                  "entry": ["showGroupProgress"],
+                  "on": { "GROUP_COMPLETE": "none", "GO_BACK": "discovery" }
+                }
+              },
+              "on": {
+                "NAVIGATE_DASHBOARD": "#navigation.success.dashboard",
+                "NAVIGATE_CATALOG": "#navigation.success.catalog"
+              }
+            },
+            "purchase_group_workflow": {
+              "initial": "browsing",
+              "states": {
+                "browsing": {
+                  "entry": ["showGroupCatalog"],
+                  "on": { "SELECT_GROUP": "confirming", "GO_BACK": "none" }
+                },
+                "confirming": {
+                  "entry": ["showJoinModal"],
+                  "on": { "CONFIRM_JOIN": "tracking", "CANCEL": "browsing" }
+                },
+                "tracking": {
+                  "entry": ["showGroupTracking"],
+                  "on": { "GROUP_COMPLETE": "none", "GO_BACK": "browsing" }
+                }
+              },
+              "on": {
+                "NAVIGATE_DASHBOARD": "#navigation.success.dashboard",
+                "NAVIGATE_CATALOG": "#navigation.success.catalog"
+              }
+            }
+          }
+        }
+      }
+    }
+
+23. WORKFLOW IDENTIFICATION RULES:
+    Identify workflows from the INPUT CONTEXT by looking for:
+    - VERBS OF ACTION: partecipare, confrontare, ricevere, unirsi, monitorare, vedere, scoprire
+    - MULTI-STEP PROCESSES: anything that spans multiple screens
+    - USER JOURNEYS: "voglio vedere se risparmio" = benchmark_workflow
+    - "gruppi d'acquisto" = purchase_group_workflow
+    - "alert prezzi" = price_alert_workflow
+    
+    For each workflow:
+    - Give it a unique id (snake_case) ending with "_workflow"
+    - Define 3-5 internal steps (micro-states)
+    - Each step MUST have entry actions and transitions
+    - EVERY step MUST have a GO_BACK or CANCEL transition
+    - The LAST step MUST have a completion event (COMPLETED, CANCELLED, DISMISSED) → "none"
+
+24. WORKFLOW-TO-PAGE CONNECTIONS:
+    Workflows can be triggered FROM pages and can navigate BACK to pages:
+    - Trigger events come FROM navigation states (e.g., VIEW_BENCHMARK from catalog)
+    - Cross-page events in workflow "on" block use "#navigation." prefix
+    - Example: "NAVIGATE_DASHBOARD": "#navigation.success.dashboard"
+    - This connects the parallel branches without breaking encapsulation
+
+25. WORKFLOW COMPLETION IS MANDATORY:
+    Every workflow compound state MUST have at least one transition that returns to "none":
+    - "COMPLETED" → "none" (success path)
+    - "CANCELLED" → "none" (user cancelled)
+    - "DISMISSED" → "none" (workflow dismissed)
+    
+    Without this, the workflow stays "active" forever and blocks the app.
+    This is a HARD REQUIREMENT - no exceptions.
 
 CRITICAL - DO NOT USE THESE REDUNDANT EVENTS (use the consolidated alternatives):
 - DATA_LOADED, DATA_FETCHED -> use ON_SUCCESS (with guard "hasData")

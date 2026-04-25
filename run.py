@@ -184,6 +184,29 @@ Examples:
     cicd_parser.add_argument("--backend-spec", type=str, default="output/backend/backend_spec.md")
     cicd_parser.add_argument("--output", type=str, default="output/ci_cd/ci_cd_spec.md")
 
+    # ─── SECURITY ───
+    security_parser = subparsers.add_parser(
+        "security",
+        help="Generate security audit and threat model",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    python run.py security
+    python run.py security --frontend output/spec/spec.md --backend output/backend/backend_spec.md --ci-cd output/ci_cd/ci_cd_spec.md
+    python run.py security --output output/security/security_spec.md
+        """
+    )
+    security_parser.add_argument("--frontend", type=str, default="output/spec/spec.md",
+                                 help="Path to frontend specification file")
+    security_parser.add_argument("--backend", type=str, default="output/backend/backend_spec.md",
+                                 help="Path to backend specification file")
+    security_parser.add_argument("--ci-cd", type=str, default="output/ci_cd/ci_cd_spec.md",
+                                 help="Path to CI/CD specification file")
+    security_parser.add_argument("--context", type=str, default="output/context/project_context.md",
+                                 help="Path to project context file")
+    security_parser.add_argument("--output", type=str, default="output/security/security_spec.md",
+                                 help="Output file path for security specification")
+
     # ─── FRONTEND INDIVIDUAL STEPS ───
     ingest_parser = subparsers.add_parser("ingest", help="Process inputs and generate context")
     ingest_parser.add_argument("--input-dir", type=str, default="inputs/")
@@ -350,6 +373,17 @@ Examples:
                     "--backend-spec", args.backend_spec,
                     "--output", args.output]
         cicd_main()
+
+    # ─── SECURITY ───
+    elif args.command == "security":
+        from pipeline.security import main as security_main  # type: ignore
+        sys.argv = ["security",
+                    "--frontend", args.frontend,
+                    "--backend", args.backend,
+                    "--ci-cd", args.ci_cd,
+                    "--context", args.context,
+                    "--output", args.output]
+        security_main()
 
     # ─── FRONTEND INDIVIDUAL STEPS ───
     elif args.command == "ingest":
