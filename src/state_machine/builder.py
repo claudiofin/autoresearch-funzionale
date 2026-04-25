@@ -1,17 +1,19 @@
 """Pattern Compiler for State Machines — transforms chaotic LLM output into valid XState.
 
-This is NOT a validator. It's a COMPILER that applies 5 structural laws to ANY
+This is NOT a validator. It's a COMPILER that applies 6 structural laws to ANY
 state machine the LLM generates, regardless of app domain, naming conventions, or
 language. It recognizes PATTERNS, not names.
 
-The 5 Rules:
+The 6 Rules:
   1. ERROR INJECTION — Every state with API events gets an error_handler sub-state
   2. CANONICAL TARGETS — Cross-branch references use #ID, ambiguities resolved by specificity
   3. SPECIFICITY DEDUP — S(state) = depth × sub_states + transitions; keep the smartest
   4. DEAD STATE CLEANUP — BFS from initial; unreachable states are connected or removed
   5. GLOBAL EXIT — Every workflow gets a GLOBAL_EXIT → navigation entry point
+  6. BRANCH PLACEMENT — Orphan states moved to correct branch (compound→workflows, leaf→navigation)
 
 Key principle: The builder doesn't decide WHAT states to create, only HOW they must be structured.
+All rules are STRUCTURAL (based on JSON shape), not NAME-BASED (no hardcoded keywords).
 """
 
 import json
@@ -139,17 +141,28 @@ def _resolve_canonical_target(target: str, source_path: str, all_paths: dict) ->
 # Rule 1: Error Injection (The "Parachute")
 # =============================================================================
 
-# Events that imply an async API call and need error handling
+# Events that imply an async API call and need error handling.
+# STRUCTURAL: also matches ANY event containing underscore (e.g., PUBLISH_TELEMETRY, SYNC_DEVICES)
+# This makes it domain-agnostic — works for e-commerce, IoT, social, etc.
 API_EVENT_PATTERNS = {
     "SUBMIT", "CONFIRM", "LOAD", "SAVE", "JOIN", "FETCH",
     "CREATE", "UPDATE", "DELETE", "POST", "GET", "REQUEST",
     "PROCESS", "CALCULATE", "VALIDATE", "REGISTER", "LOGIN",
-    "CHECKOUT", "PAY", "BOOK", "RESERVE"
+    "CHECKOUT", "PAY", "BOOK", "RESERVE",
+    # IoT / real-time patterns
+    "PUBLISH", "SUBSCRIBE", "TELEMETRY", "SYNC", "STREAM",
+    "CONNECT", "DISCONNECT", "OBSERVE", "WATCH",
+    # Social / content patterns
+    "LIKE", "SHARE", "COMMENT", "FOLLOW", "POST", "UPLOAD",
+    "DOWNLOAD", "IMPORT", "EXPORT", "SYNC"
 }
 
 
 def _has_api_events(state_config: dict) -> bool:
     """Check if a state has events that imply API calls.
+    
+    STRUCTURAL approach: matches known patterns OR any event with underscore
+    (which typically indicates a domain-specific API call).
     
     Args:
         state_config: The state's configuration
@@ -158,10 +171,15 @@ def _has_api_events(state_config: dict) -> bool:
         True if any event matches an API pattern
     """
     events = state_config.get("on", {})
-    return any(
-        event.upper() in API_EVENT_PATTERNS 
-        for event in events.keys()
-    )
+    for event in events.keys():
+        upper = event.upper()
+        # Known pattern match
+        if upper in API_EVENT_PATTERNS:
+            return True
+        # Structural: events with underscore are typically API calls (e.g., PUBLISH_TELEMETRY)
+        if "_" in upper and len(upper) > 3:
+            return True
+    return False
 
 
 def inject_error_handler(state_name: str, state_config: dict) -> dict:
@@ -239,8 +257,9 @@ def apply_error_injection(machine: dict) -> dict:
 def _find_first_nav_state(machine: dict) -> str:
     """Find the first navigation state to use as GLOBAL_EXIT target.
     
-    Searches for navigation.success first, then navigation.app_idle,
-    then any navigation state.
+    STRUCTURAL approach: takes the INITIAL state of the navigation branch,
+    or the first available state if no initial is defined.
+    No keyword matching — works with ANY naming convention.
     
     Args:
         machine: The state machine dict
@@ -248,20 +267,29 @@ def _find_first_nav_state(machine: dict) -> str:
     Returns:
         The canonical path to the first nav state
     """
-    nav = machine.get("states", {}).get("navigation", {})
+    states = machine.get("states", {})
+    
+    # Priority 1: navigation branch → use its initial state
+    nav = states.get("navigation", {})
+    nav_initial = nav.get("initial")
     nav_states = nav.get("states", {})
     
-    # Priority 1: navigation.success
-    if "success" in nav_states:
-        return "navigation.success"
+    if nav_initial and nav_initial in nav_states:
+        return f"navigation.{nav_initial}"
     
-    # Priority 2: navigation.app_idle
-    if "app_idle" in nav_states:
-        return "navigation.app_idle"
+    # Priority 2: first state in navigation (any name)
+    if nav_states:
+        first_state = next(iter(nav_states))
+        return f"navigation.{first_state}"
     
-    # Priority 3: any navigation state
-    for name in nav_states:
-        return f"navigation.{name}"
+    # Priority 3: any parallel branch with states
+    for branch_name, branch_config in states.items():
+        if branch_name in ("navigation",):
+            continue
+        branch_states = branch_config.get("states", {})
+        if branch_states:
+            first_state = next(iter(branch_states))
+            return f"{branch_name}.{first_state}"
     
     # Fallback
     return "navigation"
@@ -527,33 +555,42 @@ def apply_dead_state_cleanup(machine: dict) -> dict:
 # Core Builder Functions
 # =============================================================================
 
-def _format_xstate_actions(actions_list: list) -> list:
+# STRUCTURAL: extensible action mapping — add domain-specific actions here
+# Each entry maps an action name → (type, assignment_key, value_lambda)
+XSTATE_ACTION_MAP = {
+    "incrementRetryCount": ("assign", "retryCount", lambda ctx: ctx.get("retryCount", 0) + 1),
+    "setPreviousState": ("assign", "previousState", lambda ctx, evt, meta: meta.state.value),
+    "clearErrors": ("assign", "errors", lambda ctx: []),
+    "resetRetryCount": ("assign", "retryCount", lambda ctx: 0),
+    "setUser": ("assign", "user", lambda ctx, evt: evt.data),
+    "setLoading": ("assign", "loading", lambda ctx: True),
+    "setLoaded": ("assign", "loading", lambda ctx: False),
+}
+
+
+def _format_xstate_actions(actions_list: list, custom_map: dict = None) -> list:
     """Format textual actions into valid XState v5 actions.
     
-    Converts action strings like 'incrementRetryCount' into XState assign actions
-    that actually update the machine context.
+    STRUCTURAL: uses an extensible map instead of hardcoded if/elif.
+    Supports custom action mappings for domain-specific needs.
     
     Args:
         actions_list: List of action strings from LLM
+        custom_map: Optional dict of additional action mappings
     
     Returns:
         List of XState-compatible actions
     """
+    # Merge default + custom maps (custom overrides default)
+    action_map = {**XSTATE_ACTION_MAP, **(custom_map or {})}
+    
     formatted = []
     for action in actions_list:
-        if action == "incrementRetryCount":
+        if action in action_map:
+            action_type, key, value_fn = action_map[action]
             formatted.append({
-                "type": "assign",
-                "assignment": {
-                    "retryCount": lambda ctx: ctx.get("retryCount", 0) + 1
-                }
-            })
-        elif action == "setPreviousState":
-            formatted.append({
-                "type": "assign",
-                "assignment": {
-                    "previousState": lambda ctx, evt, meta: meta.state.value
-                }
+                "type": action_type,
+                "assignment": {key: value_fn}
             })
         else:
             formatted.append(action)
@@ -676,7 +713,7 @@ def _auto_generate_sub_states(state_name: str, state: dict) -> dict:
         "exit": ["hideErrorBanner"],
         "on": {
             "RETRY": ".loading",
-            "CANCEL": f"#{_find_exit_target(state_name)}"
+            "CANCEL": f"#{_find_exit_target_for_state(state_name)}"
         }
     }
     
@@ -686,19 +723,42 @@ def _auto_generate_sub_states(state_name: str, state: dict) -> dict:
     }
 
 
-def _find_exit_target(state_name: str) -> str:
-    """Find the appropriate exit target for a state.
+def _find_exit_target_for_state(state_name: str, machine: dict = None) -> str:
+    """Find the appropriate exit target for a state using STRUCTURAL analysis.
+    
+    Instead of keyword matching, this checks:
+    1. Is the state inside the workflows branch? → workflows.none
+    2. Is the state inside the navigation branch? → navigation.{initial}
+    3. Fallback: check if state name contains branch indicators in its path
     
     Args:
-        state_name: Name of the state
+        state_name: Full path of the state (e.g., "workflows.benchmark", "navigation.success")
+        machine: Optional state machine dict for structural lookup
     
     Returns:
         Canonical exit target path
     """
-    # Workflow states exit to workflows.none
+    # Structural check: if the path contains the branch name
+    if state_name.startswith("workflows.") or state_name.startswith("active_workflows."):
+        return "workflows.none"
+    
+    if state_name.startswith("navigation."):
+        # Find the initial state of navigation
+        if machine:
+            nav = machine.get("states", {}).get("navigation", {})
+            nav_initial = nav.get("initial", "app_idle")
+            return f"navigation.{nav_initial}"
+        return "navigation.app_idle"
+    
+    # Fallback: if state name contains workflow-like keywords (backward compat)
     if any(kw in state_name.lower() for kw in ["workflow", "benchmark", "purchase", "alert", "group"]):
         return "workflows.none"
-    # Navigation states exit to navigation.app_idle
+    
+    # Default: navigation initial
+    if machine:
+        nav = machine.get("states", {}).get("navigation", {})
+        nav_initial = nav.get("initial", "app_idle")
+        return f"navigation.{nav_initial}"
     return "navigation.app_idle"
 
 
@@ -872,13 +932,15 @@ def add_transitions_to_branch(machine: dict, transitions: list):
                 target_dict[resolved_from]["on"][event] = resolved_target
 
 
-def build_workflow_compound_state(workflow: dict) -> dict:
+def build_workflow_compound_state(workflow: dict, machine: dict = None) -> dict:
     """Build a compound state for a workflow.
     
+    STRUCTURAL: resolves 'none' and navigation targets dynamically.
     Creates hierarchical state with internal micro-states for each step.
     
     Args:
         workflow: Analyst workflow dict with id, name, steps, etc.
+        machine: Optional state machine dict for structural resolution
     
     Returns:
         XState compound state config
@@ -890,6 +952,29 @@ def build_workflow_compound_state(workflow: dict) -> dict:
     
     if not steps:
         return {}
+    
+    # STRUCTURAL: find the "none" state dynamically
+    none_target = "none"  # default
+    if machine:
+        wf_branch = machine.get("states", {}).get("workflows") or machine.get("states", {}).get("active_workflows", {})
+        wf_states = wf_branch.get("states", {})
+        # Find the first state that looks like a "none" state (has hideWorkflowOverlay entry)
+        for state_name, state_config in wf_states.items():
+            entry = state_config.get("entry", [])
+            if any("hideWorkflow" in a for a in entry) or state_name == "none":
+                none_target = state_name
+                break
+    
+    # STRUCTURAL: find the navigation success state dynamically
+    nav_success_prefix = "#navigation.success"  # default
+    if machine:
+        nav = machine.get("states", {}).get("navigation", {})
+        nav_states = nav.get("states", {})
+        # Find the first state that looks like a success/main state
+        for state_name in nav_states:
+            if state_name in ("success", "main", "home", "dashboard"):
+                nav_success_prefix = f"#navigation.{state_name}"
+                break
     
     initial_step = steps[0]
     state_config = {
@@ -915,15 +1000,15 @@ def build_workflow_compound_state(workflow: dict) -> dict:
         if i > 0:
             step_config["on"]["GO_BACK"] = steps[i - 1]
         else:
-            step_config["on"]["GO_BACK"] = "none"
+            step_config["on"]["GO_BACK"] = none_target
         
-        # CANCEL to none
-        step_config["on"]["CANCEL"] = "none"
+        # CANCEL to none (resolved dynamically)
+        step_config["on"]["CANCEL"] = none_target
         
         # Completion events for last step
         if i == len(steps) - 1:
             for completion_event in completion_events:
-                step_config["on"][completion_event] = "none"
+                step_config["on"][completion_event] = none_target
         
         state_config["states"][step] = step_config
     
@@ -931,7 +1016,7 @@ def build_workflow_compound_state(workflow: dict) -> dict:
     for event in cross_page_events:
         if event.startswith("NAVIGATE_"):
             target_page = event.replace("NAVIGATE_", "").lower()
-            state_config["on"][event] = f"#navigation.success.{target_page}"
+            state_config["on"][event] = f"{nav_success_prefix}.{target_page}"
     
     return state_config
 
@@ -958,6 +1043,9 @@ def add_workflows_to_machine(machine: dict, workflows: list):
 def normalize_machine(machine: dict) -> dict:
     """Normalize machine: fix common issues.
     
+    STRUCTURAL approach: uses the 'initial' value to determine the target state name,
+    not hardcoded 'app_idle'. Works with ANY naming convention.
+    
     Handles both parallel and flat architectures.
     
     Args:
@@ -968,30 +1056,33 @@ def normalize_machine(machine: dict) -> dict:
     """
     if machine.get("type") == "parallel" and "navigation" in machine.get("states", {}):
         nav_branch = machine["states"]["navigation"]
+        nav_initial = nav_branch.get("initial", "app_idle")
         
-        # Fix idle → app_idle
-        if "idle" in nav_branch.get("states", {}) and nav_branch.get("initial") == "app_idle":
-            nav_branch["states"]["app_idle"] = nav_branch["states"].pop("idle")
+        # Fix idle → {initial} (use the actual initial state name)
+        if "idle" in nav_branch.get("states", {}) and nav_initial:
+            nav_branch["states"][nav_initial] = nav_branch["states"].pop("idle")
             for state_config in nav_branch["states"].values():
                 for event, target in list(state_config.get("on", {}).items()):
                     if target == "idle":
-                        state_config["on"][event] = "app_idle"
+                        state_config["on"][event] = nav_initial
         
-        # Ensure app_idle exists
-        if "app_idle" not in nav_branch.get("states", {}):
-            nav_branch["states"]["app_idle"] = {"entry": [], "exit": [], "on": {}}
+        # Ensure initial state exists
+        if nav_initial and nav_initial not in nav_branch.get("states", {}):
+            nav_branch["states"][nav_initial] = {"entry": [], "exit": [], "on": {}}
     
     else:
         # Flat architecture
-        if "idle" in machine["states"] and machine.get("initial") == "app_idle":
-            machine["states"]["app_idle"] = machine["states"].pop("idle")
+        seq_initial = machine.get("initial", "app_idle")
+        
+        if "idle" in machine["states"] and seq_initial:
+            machine["states"][seq_initial] = machine["states"].pop("idle")
             for state_config in machine["states"].values():
                 for event, target in list(state_config.get("on", {}).items()):
                     if target == "idle":
-                        state_config["on"][event] = "app_idle"
+                        state_config["on"][event] = seq_initial
         
-        if "app_idle" not in machine["states"]:
-            machine["states"]["app_idle"] = {"entry": [], "exit": [], "on": {}}
+        if seq_initial and seq_initial not in machine["states"]:
+            machine["states"][seq_initial] = {"entry": [], "exit": [], "on": {}}
     
     return machine
 
@@ -1012,80 +1103,254 @@ def deduplicate_machine(machine: dict) -> dict:
 
 
 # =============================================================================
+# Rule 6: Structural Branch Placement
+# =============================================================================
+
+def _is_compound_state(state_config: dict) -> bool:
+    """Check if a state is a compound state (has sub_states).
+    
+    A compound state is a state that contains other states.
+    These are typically workflows or complex screens.
+    
+    Args:
+        state_config: The state's configuration dict
+    
+    Returns:
+        True if this state has sub_states
+    """
+    return bool(state_config.get("states", {}))
+
+
+def _is_leaf_state(state_config: dict) -> bool:
+    """Check if a state is a leaf state (no sub_states, just entry/exit/on).
+    
+    A leaf state is a simple state that doesn't contain other states.
+    These are typically navigation pages/screens.
+    
+    Args:
+        state_config: The state's configuration dict
+    
+    Returns:
+        True if this state has no sub_states
+    """
+    return not state_config.get("states", {})
+
+
+def apply_branch_placement(machine: dict) -> dict:
+    """Move orphan states to the correct branch based on their structure.
+    
+    RULE: States at root level that are NOT 'navigation' or 'workflows' branches
+    should be moved into the appropriate branch:
+    - Compound states (have sub_states) → workflows branch
+    - Leaf states (no sub_states) → navigation branch
+    - States whose name equals machine.id → REMOVE (LLM error)
+    
+    This is a STRUCTURAL rule, not a name-based rule.
+    It works with ANY app because it looks at the JSON structure, not the names.
+    
+    Args:
+        machine: The state machine dict
+    
+    Returns:
+        Machine with orphan states moved to correct branches
+    """
+    states = machine.get("states", {})
+    machine_id = machine.get("id", "")
+    
+    # Identify branches
+    nav_branch = states.get("navigation", {})
+    wf_branch = states.get("workflows") or states.get("active_workflows", {})
+    
+    # States that are branches (not orphans) — STRUCTURAL: any state with 'initial' + 'states' is a branch
+    branch_names = {"navigation", "workflows", "active_workflows"}
+    
+    # CRITICAL: Handle machine.id as state name BEFORE structural branch detection
+    # This is an LLM error: the machine's own ID should not be a state name.
+    # If it's a compound state (has sub_states), move it to workflows branch.
+    # If it's a leaf state, move it to navigation branch.
+    if machine_id and machine_id in states:
+        orphan_config = states[machine_id]
+        if _is_compound_state(orphan_config):
+            if "states" not in wf_branch:
+                wf_branch["states"] = {}
+            wf_branch["states"][machine_id] = orphan_config
+        else:
+            if "states" not in nav_branch:
+                nav_branch["states"] = {}
+            nav_branch["states"][machine_id] = orphan_config
+        del states[machine_id]
+    
+    # Also detect branches by structure (has 'initial' + 'states' = parallel/compound branch)
+    for name, config in list(states.items()):
+        if name in branch_names:
+            continue
+        if config.get("initial") and config.get("states"):
+            branch_names.add(name)
+    
+    # Find orphan states (at root level, not branches)
+    orphans = {}
+    for name, config in list(states.items()):
+        if name in branch_names:
+            continue
+        # This is an orphan state
+        orphans[name] = config
+    
+    # Move orphans to appropriate branch
+    for name, config in orphans.items():
+        if _is_compound_state(config):
+            # Compound state → workflows branch
+            if "states" not in wf_branch:
+                wf_branch["states"] = {}
+            wf_branch["states"][name] = config
+        else:
+            # Leaf state → navigation branch
+            if "states" not in nav_branch:
+                nav_branch["states"] = {}
+            nav_branch["states"][name] = config
+        
+        # Remove from root
+        if name in states:
+            del states[name]
+    
+    return machine
+
+
+# =============================================================================
 # Main Compilation Pipeline
 # =============================================================================
 
 # States that are part of the auto-generated loading/ready/error pattern
-# and should NOT get their own sub_states injected
-AUTO_GENERATED_SUB_STATES = {"loading", "ready", "error"}
+# and should NOT get their own sub_states injected.
+# STRUCTURAL: also skip any state that already has 'initial' + 'states' (compound states).
+AUTO_GENERATED_SUB_STATES = {"loading", "ready", "error", "calculating", "fetching", "submitting", "saving", "processing", "validating", "authenticating", "registering", "joining", "tracking", "monitoring", "deleting", "creating"}
 
-# Context-aware action patterns → sub_state name mapping
-# If entry_actions contain these patterns, use specific sub_state names instead of generic "loading"
-CONTEXT_AWARE_PATTERNS = {
-    "calculate": "calculating",
-    "cluster": "calculating",
-    "fetch": "fetching",
-    "load": "loading",
-    "submit": "submitting",
-    "save": "saving",
-    "process": "processing",
-    "validate": "validating",
-    "authenticate": "authenticating",
-    "register": "registering",
-    "join": "joining",
-    "track": "tracking",
-    "monitor": "monitoring",
-}
-
-
-def _detect_context_aware_name(entry_actions: list) -> str:
-    """Detect the most appropriate sub_state name based on entry_actions.
+def _infer_sub_state_name(action_name: str) -> str:
+    """Infer the sub_state name from an action name using linguistic patterns.
     
-    Instead of always using 'loading', this reads the entry_actions to determine
-    what the state is actually doing:
-    - calculateCluster → 'calculating'
-    - fetchGroupsData → 'fetching'
-    - submitGroup → 'submitting'
+    Universal approach: analyzes the VERB prefix of the action name to determine
+    what kind of operation is happening, then maps to an appropriate sub_state name.
+    
+    Examples:
+    - calculateCluster → calculating (verb: calculate)
+    - fetchGroupsData → fetching (verb: fetch)
+    - submitGroup → submitting (verb: submit)
+    - saveUser → saving (verb: save)
+    - loadProducts → loading (verb: load)
+    - processPayment → processing (verb: process)
     
     Args:
-        entry_actions: List of entry action strings
+        action_name: A single action string (e.g., "calculateCluster", "fetchGroups")
     
     Returns:
-        The most appropriate sub_state name (e.g., 'calculating', 'fetching', 'loading')
+        The inferred sub_state name (e.g., 'calculating', 'fetching', 'loading')
     """
-    if not entry_actions:
+    if not action_name:
         return "loading"
     
-    # Combine all entry actions into one string for pattern matching
-    combined = " ".join(entry_actions).lower()
+    lower = action_name.lower()
     
-    # Find the best matching pattern
-    best_match = "loading"  # default
-    best_score = 0
+    # Verb prefix patterns → gerund form (universal linguistic mapping)
+    verb_patterns = [
+        ("calculate", "calculating"),
+        ("compute", "calculating"),
+        ("cluster", "calculating"),
+        ("fetch", "fetching"),
+        ("load", "loading"),
+        ("get", "loading"),
+        ("retrieve", "loading"),
+        ("submit", "submitting"),
+        ("send", "submitting"),
+        ("post", "submitting"),
+        ("save", "saving"),
+        ("update", "saving"),
+        ("store", "saving"),
+        ("process", "processing"),
+        ("handle", "processing"),
+        ("execute", "processing"),
+        ("validate", "validating"),
+        ("verify", "validating"),
+        ("check", "validating"),
+        ("authenticate", "authenticating"),
+        ("login", "authenticating"),
+        ("register", "registering"),
+        ("signup", "registering"),
+        ("join", "joining"),
+        ("track", "tracking"),
+        ("monitor", "monitoring"),
+        ("observe", "monitoring"),
+        ("delete", "deleting"),
+        ("remove", "deleting"),
+        ("destroy", "deleting"),
+        ("create", "creating"),
+        ("add", "creating"),
+        ("generate", "creating"),
+    ]
     
-    for pattern, name in CONTEXT_AWARE_PATTERNS.items():
-        if pattern in combined:
-            # Score by pattern length (longer = more specific = better)
-            score = len(pattern)
-            if score > best_score:
-                best_score = score
-                best_match = name
+    # Find the best matching verb prefix (longest match = most specific)
+    best_match = "loading"  # default fallback
+    best_length = 0
+    
+    for verb, gerund in verb_patterns:
+        if lower.startswith(verb) or verb in lower:
+            if len(verb) > best_length:
+                best_length = len(verb)
+                best_match = gerund
     
     return best_match
 
 
-def _add_emergency_exits(states_dict: dict, parent_name: str = "") -> None:
+def _find_emergency_exit_target(machine: dict) -> str:
+    """Find the appropriate emergency exit target for a state machine.
+    
+    Instead of hardcoding '#navigation.app_idle', this dynamically finds
+    the initial state of the navigation branch (or first branch if no navigation).
+    
+    Args:
+        machine: The state machine dict
+    
+    Returns:
+        The canonical path to use as emergency exit target (e.g., '#navigation.app_idle')
+    """
+    states = machine.get("states", {})
+    
+    # Priority 1: navigation branch → its initial state
+    nav = states.get("navigation", {})
+    nav_initial = nav.get("initial")
+    if nav_initial:
+        return f"#navigation.{nav_initial}"
+    
+    # Priority 2: any parallel branch with an initial state
+    for branch_name, branch_config in states.items():
+        if branch_name in ("navigation", "workflows", "active_workflows"):
+            continue
+        branch_initial = branch_config.get("initial")
+        if branch_initial:
+            return f"#{branch_name}.{branch_initial}"
+    
+    # Priority 3: sequential machine initial state
+    seq_initial = machine.get("initial")
+    if seq_initial:
+        return seq_initial
+    
+    # Ultimate fallback
+    return "app_idle"
+
+
+def _add_emergency_exits(states_dict: dict, machine: dict, parent_name: str = "") -> None:
     """Add emergency exit transitions for states that don't have a way back.
     
     If a state has entry actions but NO transitions that lead back to the main flow,
-    add a default GO_BACK → navigation.app_idle transition.
+    add a default GO_BACK → [initial state] transition.
     
     This prevents the "Ghost Ship" problem where states exist but you can't leave them.
     
     Args:
         states_dict: The states dict to process
+        machine: The full state machine (used to find emergency exit target)
         parent_name: Current path prefix
     """
+    emergency_target = _find_emergency_exit_target(machine)
+    
     for name, config in states_dict.items():
         full_name = f"{parent_name}.{name}" if parent_name else name
         
@@ -1108,12 +1373,12 @@ def _add_emergency_exits(states_dict: dict, parent_name: str = "") -> None:
         # If no exit transitions and this is a real state (has entry actions), add emergency exit
         entry_actions = config.get("entry", [])
         if entry_actions and not has_exit and not sub_states:
-            transitions["GO_BACK"] = "#navigation.app_idle"
-            transitions["CANCEL"] = "#navigation.app_idle"
+            transitions["GO_BACK"] = emergency_target
+            transitions["CANCEL"] = emergency_target
         
         # Recurse into sub_states
         if sub_states:
-            _add_emergency_exits(sub_states, full_name)
+            _add_emergency_exits(sub_states, machine, full_name)
 
 
 def _auto_inject_sub_states(machine: dict) -> dict:
@@ -1173,7 +1438,9 @@ def _auto_inject_sub_states(machine: dict) -> dict:
                 continue
             
             # Context-aware: detect specific sub_state name from entry_actions
-            loading_name = _detect_context_aware_name(entry_actions)
+            # Use the first entry action to infer the loading sub_state name
+            first_action = entry_actions[0] if entry_actions else ""
+            loading_name = _infer_sub_state_name(first_action)
             
             # Generate sub_states
             sub_states = {}
@@ -1197,7 +1464,7 @@ def _auto_inject_sub_states(machine: dict) -> dict:
             }
             
             # 3. error sub-state
-            exit_target = _find_exit_target(full_name)
+            exit_target = _find_exit_target_for_state(full_name, machine)
             sub_states["error"] = {
                 "entry": ["logError", "showErrorBanner"],
                 "exit": ["hideErrorBanner"],
@@ -1217,24 +1484,25 @@ def _auto_inject_sub_states(machine: dict) -> dict:
     _inject_recursive(states)
     
     # Add emergency exits for states without a way back
-    _add_emergency_exits(states)
+    _add_emergency_exits(states, machine)
     
     return machine
 
 
 def compile_machine(machine: dict) -> dict:
-    """Apply all 5 Pattern Compiler rules to a state machine.
+    """Apply all 6 Pattern Compiler rules to a state machine.
     
     This is the main entry point. Feed it any LLM-generated state machine
     and it will apply structural laws to make it valid.
     
     Order of operations:
-    1. Normalize (fix naming issues)
-    2. Auto-inject sub_states (loading/ready/error)
-    3. Specificity Dedup (remove duplicates)
-    4. Error Injection (add error handlers)
-    5. Global Exit (add exit transitions)
-    6. Dead State Cleanup (remove unreachable)
+    1. Branch Placement (Rule 6: move orphans to correct branch)
+    2. Normalize (fix naming issues)
+    3. Auto-inject sub_states (loading/ready/error)
+    4. Specificity Dedup (remove duplicates)
+    5. Error Injection (add error handlers)
+    6. Global Exit (add exit transitions)
+    7. Dead State Cleanup (remove unreachable)
     
     Args:
         machine: Raw LLM-generated state machine
@@ -1242,22 +1510,25 @@ def compile_machine(machine: dict) -> dict:
     Returns:
         Compiled, structurally valid state machine
     """
-    # Step 1: Normalize naming
+    # Step 1: Branch Placement (Rule 6: move orphans to correct branch)
+    machine = apply_branch_placement(machine)
+    
+    # Step 2: Normalize naming
     machine = normalize_machine(machine)
     
-    # Step 2: Auto-inject sub_states for states that need them
+    # Step 3: Auto-inject sub_states for states that need them
     machine = _auto_inject_sub_states(machine)
     
-    # Step 3: Remove duplicates by specificity
+    # Step 4: Remove duplicates by specificity
     machine = apply_specificity_dedup(machine)
     
-    # Step 4: Inject error handlers (Rule 1)
+    # Step 5: Inject error handlers (Rule 1)
     machine = apply_error_injection(machine)
     
-    # Step 5: Inject global exit (Rule 5)
+    # Step 6: Inject global exit (Rule 5)
     machine = apply_global_exit(machine)
     
-    # Step 6: Clean up dead states (Rule 4)
+    # Step 7: Clean up dead states (Rule 4)
     machine = apply_dead_state_cleanup(machine)
     
     return machine

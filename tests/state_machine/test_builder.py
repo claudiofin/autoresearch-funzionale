@@ -11,6 +11,8 @@ from state_machine.builder import (
     build_workflow_compound_state,
     add_workflows_to_machine,
     _format_xstate_actions,
+    compile_machine,
+    apply_branch_placement,
 )
 
 
@@ -273,15 +275,28 @@ class TestNormalizeMachine:
         result = normalize_machine(machine)
         assert result["states"]["loading"]["on"]["CANCEL"] == "app_idle"
 
-    def test_creates_app_idle_if_missing(self):
+    def test_creates_initial_state_if_missing(self):
+        """STRUCTURAL: creates the state named in 'initial' if it doesn't exist."""
+        # Case 1: initial is "app_idle" but doesn't exist → create it
         machine = {
-            "initial": "loading",
+            "initial": "app_idle",
             "states": {
                 "loading": {"entry": [], "exit": [], "on": {}},
             },
         }
         result = normalize_machine(machine)
         assert "app_idle" in result["states"]
+        
+        # Case 2: initial is "loading" and already exists → no extra state needed
+        machine2 = {
+            "initial": "loading",
+            "states": {
+                "loading": {"entry": [], "exit": [], "on": {}},
+            },
+        }
+        result2 = normalize_machine(machine2)
+        assert "loading" in result2["states"]
+        assert len(result2["states"]) == 1  # No extra state created
 
     def test_parallel_architecture_has_navigation_and_workflows(self):
         machine = generate_base_machine(use_parallel=True)
@@ -557,6 +572,71 @@ class TestAddWorkflowsToMachine:
         aw = machine["states"]["active_workflows"]["states"]
         assert "benchmark_workflow" in aw
         assert "purchase_group_workflow" in aw
+
+    def test_removes_machine_id_as_state_name(self):
+        """Fix A: apply_branch_placement removes states whose name equals machine.id."""
+        machine = {
+            "id": "appFlow",
+            "type": "parallel",
+            "states": {
+                "navigation": {
+                    "initial": "app_idle",
+                    "states": {},
+                },
+                "active_workflows": {
+                    "initial": "none",
+                    "states": {},
+                },
+                # This is the LLM error: machine.id used as a state name
+                "appFlow": {
+                    "entry": ["initContext"],
+                    "exit": [],
+                    "on": {},
+                    "initial": "navigation",
+                    "states": {
+                        "loading": {"entry": ["showLoading"], "exit": [], "on": {}},
+                        "ready": {"entry": ["initContext"], "exit": [], "on": {}},
+                        "error": {"entry": ["logError"], "exit": [], "on": {}},
+                    },
+                },
+            },
+        }
+        result = apply_branch_placement(machine)
+        # appFlow should be removed from root-level states
+        assert "appFlow" not in result["states"]
+        # The compound state should be moved to workflows branch
+        wf = result["states"].get("active_workflows", {}).get("states", {})
+        assert "appFlow" in wf
+
+    def test_compile_machine_removes_machine_id_state(self):
+        """Fix A: full compile_machine pipeline removes machine.id as state."""
+        machine = {
+            "id": "myApp",
+            "type": "parallel",
+            "context": {"user": None, "errors": [], "retryCount": 0, "previousState": None},
+            "states": {
+                "navigation": {
+                    "initial": "home",
+                    "states": {},
+                },
+                "workflows": {
+                    "initial": "none",
+                    "states": {"none": {"entry": ["hideOverlay"], "exit": [], "on": {}}},
+                },
+                # LLM error: machine.id as state
+                "myApp": {
+                    "entry": ["initApp"],
+                    "exit": [],
+                    "on": {},
+                    "states": {
+                        "splash": {"entry": ["showSplash"], "exit": [], "on": {}},
+                    },
+                },
+            },
+        }
+        result = compile_machine(machine)
+        # myApp should NOT be at root level
+        assert "myApp" not in result["states"]
 
     def test_no_active_workflows_branch(self):
         machine = {

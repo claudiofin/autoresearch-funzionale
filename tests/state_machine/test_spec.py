@@ -17,7 +17,11 @@ def test_build_state_config_flat():
     config = build_state_config(state)
     assert config["entry"] == ["log"]
     assert config["exit"] == ["cleanup"]
-    assert "states" not in config
+    # STRUCTURAL: states with entry_actions now get auto-generated sub_states (loading/ready/error)
+    assert "states" in config
+    assert "loading" in config["states"]
+    assert "ready" in config["states"]
+    assert "error" in config["states"]
 
 def test_build_state_config_hierarchical():
     state = {

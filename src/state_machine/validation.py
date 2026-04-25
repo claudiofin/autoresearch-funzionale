@@ -91,22 +91,54 @@ def _collect_all_states_recursive(states: dict, prefix: str = "") -> dict:
     return result
 
 
+def _is_final_state(state_name: str, state_config: dict) -> bool:
+    """A state is final if:
+    1. STRUCTURAL: no transitions + has entry actions (it's a destination)
+    2. KEYWORD: name matches known final state keywords (success, ready, done, etc.)
+    
+    This is a HYBRID check: structural first, keyword fallback.
+    """
+    has_transitions = bool(state_config.get("on", {}))
+    has_entry = bool(state_config.get("entry", []))
+    
+    # Structural check: no transitions, but has entry actions (it's a destination)
+    if not has_transitions and has_entry:
+        return True
+    
+    # Keyword fallback: known final state names
+    if not has_transitions:
+        final_keywords = ["success", "ready", "complete", "done", "finished", "none"]
+        if any(kw in state_name.lower() for kw in final_keywords):
+            return True
+    
+    return False
+
+
+def _is_error_state(state_name: str, state_config: dict) -> bool:
+    """A state is an error state if name contains error/fail/exception OR has RETRY/CANCEL transitions."""
+    lower = state_name.lower()
+    if "error" in lower or "fail" in lower or "exception" in lower:
+        return True
+    on = state_config.get("on", {})
+    has_retry = any("retry" in k.lower() for k in on.keys())
+    has_cancel = any("cancel" in k.lower() for k in on.keys())
+    return has_retry or has_cancel
+
+
 def _find_dead_ends_in_states(states: dict, prefix: str = "") -> list:
     """Find dead-end states recursively."""
     dead_ends = []
-    final_keywords = ["success", "ready", "complete", "done", "finished", "none"]
     
     for state_name, state_config in states.items():
         full_path = f"{prefix}.{state_name}" if prefix else state_name
         transitions = state_config.get("on", {})
         
         if not transitions:
-            # Check if it's a legitimate final state
-            is_final = any(kw in state_name.lower() for kw in final_keywords)
-            # error_handler is legitimate (has RETRY/CANCEL in its own on)
-            is_error_handler = "error_handler" in state_name.lower()
+            # STRUCTURAL check: is this a legitimate final state?
+            is_final = _is_final_state(state_name, state_config)
+            is_error = _is_error_state(state_name, state_config)
             
-            if not is_final and not is_error_handler:
+            if not is_final and not is_error:
                 dead_ends.append({
                     "state": full_path,
                     "issue": "NO_EXIT_TRANSITIONS",
