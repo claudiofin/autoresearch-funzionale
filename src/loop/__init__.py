@@ -30,7 +30,7 @@ from loop.quality import QualityChecker
 # ---------------------------------------------------------------------------
 
 DEFAULT_MAX_ITERATIONS = 10
-DEFAULT_TIME_BUDGET = 1200  # 20 minutes
+DEFAULT_TIME_BUDGET = 9000  # 450 minutes
 OUTPUT_DIR = "./output"
 CONTEXT_DIR = "./output/context"
 ANALYST_DIR = "./output/analyst"

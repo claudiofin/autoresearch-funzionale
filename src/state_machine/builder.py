@@ -1617,6 +1617,274 @@ def _auto_inject_sub_states(machine: dict) -> dict:
     return machine
 
 
+# =============================================================================
+# Rule 0: Target Resolution & Placeholder Creation (CRITICAL FIX)
+# =============================================================================
+
+def _resolve_relative_target(target: str, source_path: str, machine: dict) -> str:
+    """Resolve a relative target (.name) to an absolute path.
+    
+    STRUCTURAL: resolves .app_idle from navigation.authenticating → navigation.app_idle
+    
+    Args:
+        target: Target string (may start with .)
+        source_path: Full path of the source state (e.g., "navigation.authenticating")
+        machine: The full state machine dict
+    
+    Returns:
+        Resolved absolute path (e.g., "navigation.app_idle")
+    """
+    if not target:
+        return target
+    
+    # Already absolute with #
+    if target.startswith("#"):
+        return target[1:]
+    
+    # Relative reference: .name → resolve to sibling in same parent
+    if target.startswith("."):
+        sibling_name = target[1:]
+        # Find the parent of the source
+        parts = source_path.rsplit(".", 1)
+        if len(parts) == 2:
+            parent_path, _ = parts
+            return f"{parent_path}.{sibling_name}"
+        return sibling_name
+    
+    # Contains . → might be a partial path like "navigation.app_idle"
+    if "." in target:
+        # Check if it exists as-is
+        return target
+    
+    # Simple name → try to find it in the same branch as source
+    source_parts = source_path.split(".")
+    if len(source_parts) >= 2:
+        branch = source_parts[0]
+        candidate = f"{branch}.{target}"
+        # Verify it exists
+        states = machine.get("states", {})
+        branch_config = states.get(branch, {})
+        branch_states = branch_config.get("states", {})
+        if target in branch_states:
+            return candidate
+    
+    return target
+
+
+def _resolve_caret_target(target: str, source_path: str, machine: dict) -> str:
+    """Resolve ^parent syntax (XState doesn't support ^).
+    
+    ^navigation.authenticating → #navigation.authenticating
+    
+    Args:
+        target: Target string (may start with ^)
+        source_path: Full path of the source state
+        machine: The full state machine dict
+    
+    Returns:
+        Resolved target with # prefix
+    """
+    if not target:
+        return target
+    
+    if target.startswith("^"):
+        return f"#{target[1:]}"
+    
+    return target
+
+
+def _fix_workflows_none_target(target: str, machine: dict) -> str:
+    """Fix #workflows.none when branch is actually active_workflows.
+    
+    STRUCTURAL: checks which workflow branch exists and adjusts target.
+    
+    Args:
+        target: Target string (may contain workflows.none)
+        machine: The full state machine dict
+    
+    Returns:
+        Fixed target
+    """
+    if not target:
+        return target
+    
+    states = machine.get("states", {})
+    
+    # If target references workflows.none but only active_workflows exists
+    if "workflows.none" in target or target == "workflows.none":
+        if "active_workflows" in states and "workflows" not in states:
+            return target.replace("workflows.none", "active_workflows.none")
+    
+    # Same for #workflows.none
+    if target == "#workflows.none":
+        if "active_workflows" in states and "workflows" not in states:
+            return "active_workflows.none"
+    
+    return target
+
+
+def _ensure_target_exists(target: str, source_path: str, machine: dict) -> bool:
+    """Check if a target state exists in the machine.
+    
+    Args:
+        target: Target string (absolute path or relative)
+        source_path: Full path of the source state
+        machine: The full state machine dict
+    
+    Returns:
+        True if the target exists
+    """
+    if not target:
+        return False
+    
+    # Resolve the target first
+    resolved = target
+    
+    # Handle # prefix
+    if resolved.startswith("#"):
+        resolved = resolved[1:]
+    
+    # Handle . prefix (relative)
+    if resolved.startswith("."):
+        resolved = _resolve_relative_target(resolved, source_path, machine)
+    
+    # Handle ^ prefix (caret)
+    if resolved.startswith("^"):
+        resolved = _resolve_caret_target(resolved, source_path, machine)
+        if resolved.startswith("#"):
+            resolved = resolved[1:]
+    
+    # Fix workflows.none
+    resolved = _fix_workflows_none_target(resolved, machine)
+    
+    # Now check if it exists
+    parts = resolved.split(".")
+    states = machine.get("states", {})
+    
+    for part in parts:
+        if part in states:
+            states = states[part].get("states", {})
+        else:
+            return False
+    
+    return True
+
+
+def _create_placeholder_state(path: str, machine: dict) -> None:
+    """Create a placeholder state at the given path.
+    
+    STRUCTURAL: creates minimal state config with entry/exit/on.
+    
+    Args:
+        path: Full path (e.g., "navigation.app_idle")
+        machine: The full state machine dict
+    """
+    parts = path.split(".")
+    states = machine.get("states", {})
+    
+    # Navigate to parent
+    for i, part in enumerate(parts[:-1]):
+        if part in states:
+            if "states" not in states[part]:
+                states[part]["states"] = {}
+            states = states[part]["states"]
+        else:
+            # Create intermediate placeholder
+            states[part] = {
+                "initial": parts[i + 1] if i + 1 < len(parts) - 1 else None,
+                "states": {}
+            }
+            states = states[part]["states"]
+    
+    # Create the final state if it doesn't exist
+    final_name = parts[-1]
+    if final_name not in states:
+        states[final_name] = {
+            "entry": [],
+            "exit": [],
+            "on": {}
+        }
+
+
+def apply_target_resolution(machine: dict) -> dict:
+    """Resolve all transition targets and create placeholders for missing states.
+    
+    This is the CRITICAL fix for the main problem:
+    - .app_idle → navigation.app_idle (relative resolution)
+    - ^navigation.authenticating → #navigation.authenticating (caret resolution)
+    - #workflows.none → active_workflows.none (branch name fix)
+    - Creates placeholder states for any target that doesn't exist
+    
+    Args:
+        machine: The state machine dict
+    
+    Returns:
+        Machine with all targets resolved and placeholders created
+    """
+    states = machine.get("states", {})
+    
+    def _process_states(states_dict: dict, prefix: str = "") -> None:
+        for name, config in list(states_dict.items()):
+            full_path = f"{prefix}.{name}" if prefix else name
+            
+            # Process transitions
+            transitions = config.get("on", {})
+            for event, target in list(transitions.items()):
+                target_str = target if isinstance(target, str) else target.get("target", "")
+                
+                if not target_str:
+                    continue
+                
+                # Step 1: Resolve relative targets
+                if target_str.startswith("."):
+                    resolved = _resolve_relative_target(target_str, full_path, machine)
+                elif target_str.startswith("^"):
+                    resolved = _resolve_caret_target(target_str, full_path, machine)
+                    if resolved.startswith("#"):
+                        resolved = resolved[1:]
+                else:
+                    resolved = target_str
+                
+                # Step 2: Fix workflows.none
+                resolved = _fix_workflows_none_target(resolved, machine)
+                
+                # Step 3: Update the transition
+                if isinstance(target, str):
+                    transitions[event] = resolved
+                elif isinstance(target, dict):
+                    target["target"] = resolved
+                
+                # Step 4: Create placeholder if target doesn't exist
+                if not _ensure_target_exists(resolved, full_path, machine):
+                    _create_placeholder_state(resolved, machine)
+            
+            # Recurse into sub-states
+            if "states" in config:
+                _process_states(config["states"], full_path)
+    
+    _process_states(states)
+    
+    # Also ensure initial states exist
+    def _ensure_initial(states_dict: dict, prefix: str = "") -> None:
+        for name, config in states_dict.items():
+            full_path = f"{prefix}.{name}" if prefix else name
+            initial = config.get("initial")
+            if initial and "states" in config:
+                if initial not in config["states"]:
+                    # Create placeholder for initial state
+                    config["states"][initial] = {
+                        "entry": [],
+                        "exit": [],
+                        "on": {}
+                    }
+                # Recurse
+                _ensure_initial(config["states"], full_path)
+    
+    _ensure_initial(states)
+    
+    return machine
+
+
 def compile_machine(machine: dict) -> dict:
     """Apply all 6 Pattern Compiler rules to a state machine.
     
@@ -1624,6 +1892,7 @@ def compile_machine(machine: dict) -> dict:
     and it will apply structural laws to make it valid.
     
     Order of operations:
+    0. Target Resolution (fix relative targets, caret syntax, create placeholders)
     1. Branch Placement (Rule 6: move orphans to correct branch)
     2. Normalize (fix naming issues)
     3. Auto-inject sub_states (loading/ready/error)
@@ -1638,6 +1907,9 @@ def compile_machine(machine: dict) -> dict:
     Returns:
         Compiled, structurally valid state machine
     """
+    # Step 0: Target Resolution (CRITICAL FIX for relative targets & missing states)
+    machine = apply_target_resolution(machine)
+    
     # Step 1: Branch Placement (Rule 6: move orphans to correct branch)
     machine = apply_branch_placement(machine)
     

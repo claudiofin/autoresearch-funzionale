@@ -123,6 +123,33 @@ Rules:
       "on": {{ "ON_ERROR": ".." }}  (goes to parent's error handler)
     Deep nesting without error exit = broken state machine.
 
+18. TRANSITION TARGETS MUST BE ABSOLUTE PATHS — NEVER use relative references:
+    - WRONG: "to_state": ".app_idle"  (relative — will break)
+    - WRONG: "to_state": "^navigation.authenticating"  (caret syntax — not supported)
+    - WRONG: "to_state": "#workflows.none"  (if branch is named active_workflows)
+    - CORRECT: "to_state": "navigation.app_idle"  (absolute path from root)
+    - CORRECT: "to_state": "active_workflows.none"  (absolute path from root)
+    
+    RULE: Always use the FULL PATH from the root of the state machine.
+    Format: "branch_name.state_name" or "branch_name.parent_state.child_state"
+    
+    Examples:
+    - navigation.app_idle (NOT .app_idle, NOT #navigation.app_idle)
+    - active_workflows.none (NOT #workflows.none, NOT workflows.none if branch is active_workflows)
+    - navigation.authenticating (NOT ^navigation.authenticating)
+
+19. VERIFY ALL TARGETS EXIST before generating transitions:
+    - For every "to_state" you generate, verify that the state exists in your "states" array.
+    - If you reference "navigation.app_idle", make sure you have a state at that path.
+    - If you're unsure about the branch name, use "navigation" for UI states and "active_workflows" for workflow states.
+    - Missing targets = broken state machine = user data loss.
+
+20. NEVER mix branch names:
+    - If the navigation branch is "navigation", always use "navigation.X"
+    - If the workflow branch is "active_workflows", always use "active_workflows.X"
+    - DO NOT use "workflows.X" if the branch is "active_workflows"
+    - DO NOT use "nav.X" if the branch is "navigation"
+
 CRITICAL - DO NOT USE THESE REDUNDANT EVENTS (use the consolidated alternatives):
 - DATA_LOADED, DATA_FETCHED -> use ON_SUCCESS (with guard "hasData")
 - FETCH_ERROR, FETCH_FAILED, TIMEOUT, TIMEOUT_FETCH, ERROR -> use ON_ERROR
