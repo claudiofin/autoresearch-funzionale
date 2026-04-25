@@ -191,7 +191,7 @@ class FrontendRunner:
         if os.path.exists(critic_feedback):
             args.extend(["--critic-feedback", critic_feedback])
         
-        result = self._run_module("spec", args, timeout=600)
+        result = self._run_module("spec", args, timeout=1800)
         if result.get("error"):
             return {"error": result["error"]}
         

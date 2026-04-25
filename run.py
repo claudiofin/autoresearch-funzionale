@@ -159,7 +159,7 @@ Examples:
     loop_parser.add_argument("--input-dir", type=str, default=None,
                              help="Input directory (if provided, runs automatic ingest)")
     loop_parser.add_argument("--max-iterations", type=int, default=10)
-    loop_parser.add_argument("--time-budget", type=int, default=1200)
+    loop_parser.add_argument("--time-budget", type=int, default=4800)
     loop_parser.add_argument("--force", action="store_true")
     loop_parser.add_argument("--force-design", action="store_true",
                              help="Force regeneration of DESIGN.md even if it exists")
