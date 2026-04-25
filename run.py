@@ -290,6 +290,26 @@ Examples:
     wiki_parser.add_argument("--force", action="store_true",
                              help="Force regeneration of existing files")
 
+    # ─── TESTBOOK GENERATOR ───
+    testbook_parser = subparsers.add_parser(
+        "testbook-generator",
+        help="Generate test scenarios from XState machine definition",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    python run.py testbook-generator
+    python run.py testbook-generator --machine output/spec/spec_machine.json
+    python run.py testbook-generator --output output/testbook/system_tests.md
+    python run.py testbook-generator --force
+        """
+    )
+    testbook_parser.add_argument("--machine", type=str, default="output/spec/spec_machine.json",
+                                 help="Path to the XState machine JSON file")
+    testbook_parser.add_argument("--output", type=str, default="output/testbook/system_tests.md",
+                                 help="Output path for the testbook markdown file")
+    testbook_parser.add_argument("--force", action="store_true",
+                                 help="Force regeneration even if output file exists")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -465,6 +485,16 @@ Examples:
         if args.force:
             sys.argv.append("--force")
         kanban_main()
+
+    # ─── TESTBOOK GENERATOR ───
+    elif args.command == "testbook-generator":
+        from pipeline.testbook_generator import main as testbook_main  # type: ignore
+        sys.argv = ["testbook-generator",
+                    "--machine", args.machine,
+                    "--output", args.output]
+        if args.force:
+            sys.argv.append("--force")
+        testbook_main()
 
 
 if __name__ == "__main__":

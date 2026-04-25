@@ -33,6 +33,7 @@ The system now supports **Journey-Centric** state machine architecture with **Pa
 11. **Security Pipeline**: analyzes security requirements
 12. **Backend Pipeline**: generates backend specification
 13. **CI/CD Pipeline**: generates CI/CD specification
+14. **Testbook Generator**: generates test scenarios from XState machine (deterministic, no LLM needed)
 
 ## Quick Start
 
@@ -107,6 +108,9 @@ python3 run.py security
 
 # 5. LLM Wiki Generator (creates Memory Bank for AI agents)
 python3 run.py wiki-generator
+
+# 6. Testbook Generator (generates test scenarios from XState)
+python3 run.py testbook-generator
 ```
 
 ### One-Liner (All Pipelines)
@@ -155,6 +159,9 @@ python3 run.py security --spec output/spec/spec.md --backend-spec output/backend
 
 # Mode 9: LLM Wiki Generator
 python3 run.py wiki-generator --context output/context/project_context.md
+
+# Mode 10: Testbook Generator (deterministic, no LLM needed)
+python3 run.py testbook-generator --machine output/spec/spec_machine.json
 ```
 
 ## Project Structure
@@ -191,6 +198,8 @@ autoresearch/
 │   │   ├── @SECURITY_RULES.md   # Security requirements
 │   │   ├── project_index.md     # Project index (where to find everything)
 │   │   └── active_context.md    # Development log (updated by AI agent)
+│   ├── testbook/                # Test scenarios from XState machine
+│   │   └── system_tests.md      # Testbook with scenarios per workflow
 │   └── loop_checkpoints/        # Loop iteration checkpoints
 │       ├── checkpoint_iter_001.json
 │       └── final_report.json
@@ -221,6 +230,10 @@ autoresearch/
 │   │   └── wiki_generator/    # LLM Wiki / Memory Bank generator
 │   │       ├── wiki_generator.py  # Generates Tech Rules, Glossary, Index
 │   │       └── __main__.py    # CLI entry point
+│   │   └── testbook_generator/  # Testbook generation (deterministic)
+│   │       ├── engine.py        # Core engine (coverage, invariants, scenarios)
+│   │       ├── __init__.py      # CLI entry point
+│   │       └── __main__.py      # Module support
 │   ├── state_machine/         # XState machine building
 │   │   ├── builder.py         # Machine builder (parallel states, workflows)
 │   │   ├── post_processing.py # Post-processing (dedup, cleanup)
@@ -408,7 +421,20 @@ inputs/ (PDF, notes, HTML)
     │
     ▼
 ┌─────────────────────────────────────────────────────────┐
-│  STEP 5: Kanban Task Generator                          │
+│  STEP 5: Testbook Generator (The "QA Auditor")          │
+│  python3 run.py testbook-generator                      │
+│                                                         │
+│  Deterministic analysis of XState machine:              │
+│  - State Coverage Audit (reachable/unreachable states)  │
+│  - Global Invariants (CANCEL→none, completion paths)    │
+│  - Test Scenarios (happy path, cancel, back per state)  │
+│                                                         │
+│  Output: output/testbook/system_tests.md                │
+└─────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│  STEP 6: Kanban Task Generator                          │
 │  python3 run.py kanban-task                             │
 │                                                         │
 │  Each task includes wiki file references:               │
@@ -422,7 +448,7 @@ inputs/ (PDF, notes, HTML)
     │
     ▼
 ┌─────────────────────────────────────────────────────────┐
-│  STEP 6: AI Agent Execution (Cline / Claude Code)       │
+│  STEP 7: AI Agent Execution (Cline / Claude Code)       │
 │                                                         │
 │  Prompt: "Read MASTER_PLAN.md, pick first task,        │
 │  read wiki files, write code, update active_context.md" │
@@ -441,6 +467,7 @@ python3 run.py loop-frontend --input-dir inputs/ --max-iterations 5 --generate-u
 && python3 run.py ci-cd \
 && python3 run.py security \
 && python3 run.py wiki-generator \
+&& python3 run.py testbook-generator \
 && python3 run.py kanban-task
 ```
 
