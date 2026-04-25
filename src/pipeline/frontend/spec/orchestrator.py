@@ -10,7 +10,7 @@ import time
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from pipeline.frontend.spec.llm_client import call_llm_spec
-from state_machine.builder import generate_base_machine, build_state_config, add_transitions, add_transitions_to_branch, normalize_machine, add_workflows_to_machine
+from state_machine.builder import generate_base_machine, build_state_config, add_transitions, add_transitions_to_branch, normalize_machine, add_workflows_to_machine, compile_machine
 from state_machine.post_processing import remove_toplevel_duplicates, complete_missing_branches, clean_unreachable_states, validate_no_critical_patterns, create_missing_target_states
 from diagrams.plantuml import generate_plantuml_statechart, generate_plantuml_sequence
 from diagrams.markdown import generate_spec_markdown
@@ -157,6 +157,9 @@ def run_analysis(
     
     # Post-processing: remove unreachable states and XState keywords
     machine = clean_unreachable_states(machine)
+    
+    # Apply Pattern Compiler (error injection, global exit, dead state cleanup)
+    machine = compile_machine(machine)
     
     # Post-processing: validate against critical rules 15, 16, 17
     violations = validate_no_critical_patterns(machine)

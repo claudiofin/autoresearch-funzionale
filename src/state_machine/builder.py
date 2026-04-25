@@ -614,10 +614,99 @@ def generate_base_machine(use_parallel: bool = True) -> dict:
         }
 
 
+def _auto_generate_sub_states(state_name: str, state: dict) -> dict:
+    """Auto-generate sub_states (loading, ready, error) for states that need them.
+    
+    A state needs sub_states if:
+    - It has entry actions (indicates it's a real screen/workflow)
+    - It has API-like events (needs error handling)
+    - It's a workflow step (has cross_page_events)
+    
+    Args:
+        state_name: Name of the parent state
+        state: LLM-generated state dict
+    
+    Returns:
+        Dict with 'initial' and 'states' for sub-states
+    """
+    entry_actions = state.get("entry_actions", [])
+    exit_actions = state.get("exit_actions", [])
+    transitions = state.get("transitions", [])
+    
+    # Check if this state needs sub_states
+    needs_sub_states = (
+        len(entry_actions) > 0 or  # Has entry actions
+        len(transitions) > 0 or    # Has transitions
+        state.get("sub_states", [])  # Already has sub_states defined
+    )
+    
+    if not needs_sub_states:
+        return {}
+    
+    # Check if sub_states are already defined
+    if state.get("sub_states"):
+        return {}  # Already handled by the main logic
+    
+    # Auto-generate: loading → ready → error pattern
+    sub_states = {}
+    
+    # 1. loading sub-state
+    sub_states["loading"] = {
+        "entry": ["showLoading", f"fetch{state_name.title()}"],
+        "exit": ["hideLoading"],
+        "on": {
+            "DATA_LOADED": ".ready",
+            "LOAD_FAILED": ".error",
+            "TIMEOUT": ".error"
+        }
+    }
+    
+    # 2. ready sub-state (the main working state)
+    ready_entry = list(entry_actions) if entry_actions else [f"show{state_name.title()}"]
+    ready_exit = list(exit_actions) if exit_actions else [f"hide{state_name.title()}"]
+    sub_states["ready"] = {
+        "entry": ready_entry,
+        "exit": ready_exit,
+        "on": {}
+    }
+    
+    # 3. error sub-state
+    sub_states["error"] = {
+        "entry": ["logError", "showErrorBanner"],
+        "exit": ["hideErrorBanner"],
+        "on": {
+            "RETRY": ".loading",
+            "CANCEL": f"#{_find_exit_target(state_name)}"
+        }
+    }
+    
+    return {
+        "initial": "loading",
+        "states": sub_states
+    }
+
+
+def _find_exit_target(state_name: str) -> str:
+    """Find the appropriate exit target for a state.
+    
+    Args:
+        state_name: Name of the state
+    
+    Returns:
+        Canonical exit target path
+    """
+    # Workflow states exit to workflows.none
+    if any(kw in state_name.lower() for kw in ["workflow", "benchmark", "purchase", "alert", "group"]):
+        return "workflows.none"
+    # Navigation states exit to navigation.app_idle
+    return "navigation.app_idle"
+
+
 def build_state_config(state: dict) -> dict:
     """Build XState state config from LLM state dict.
     
     Supports hierarchical states with auto-generated navigation events.
+    Auto-generates loading/ready/error sub_states for states that need them.
     
     Args:
         state: LLM-generated state dict
@@ -625,6 +714,8 @@ def build_state_config(state: dict) -> dict:
     Returns:
         XState-compatible state config
     """
+    state_name = state.get("name", "unknown")
+    
     config = {
         "entry": state.get("entry_actions", []),
         "exit": state.get("exit_actions", []),
@@ -665,6 +756,12 @@ def build_state_config(state: dict) -> dict:
                     other_name = other_name.split(".")[-1]
                 if other_name != sub_name:
                     config["states"][other_name]["on"][nav_event] = f".{sub_name}"
+    else:
+        # Auto-generate sub_states if this state needs them
+        auto_sub = _auto_generate_sub_states(state_name, state)
+        if auto_sub:
+            config["initial"] = auto_sub["initial"]
+            config["states"] = auto_sub["states"]
     
     return config
 
@@ -918,6 +1015,213 @@ def deduplicate_machine(machine: dict) -> dict:
 # Main Compilation Pipeline
 # =============================================================================
 
+# States that are part of the auto-generated loading/ready/error pattern
+# and should NOT get their own sub_states injected
+AUTO_GENERATED_SUB_STATES = {"loading", "ready", "error"}
+
+# Context-aware action patterns → sub_state name mapping
+# If entry_actions contain these patterns, use specific sub_state names instead of generic "loading"
+CONTEXT_AWARE_PATTERNS = {
+    "calculate": "calculating",
+    "cluster": "calculating",
+    "fetch": "fetching",
+    "load": "loading",
+    "submit": "submitting",
+    "save": "saving",
+    "process": "processing",
+    "validate": "validating",
+    "authenticate": "authenticating",
+    "register": "registering",
+    "join": "joining",
+    "track": "tracking",
+    "monitor": "monitoring",
+}
+
+
+def _detect_context_aware_name(entry_actions: list) -> str:
+    """Detect the most appropriate sub_state name based on entry_actions.
+    
+    Instead of always using 'loading', this reads the entry_actions to determine
+    what the state is actually doing:
+    - calculateCluster → 'calculating'
+    - fetchGroupsData → 'fetching'
+    - submitGroup → 'submitting'
+    
+    Args:
+        entry_actions: List of entry action strings
+    
+    Returns:
+        The most appropriate sub_state name (e.g., 'calculating', 'fetching', 'loading')
+    """
+    if not entry_actions:
+        return "loading"
+    
+    # Combine all entry actions into one string for pattern matching
+    combined = " ".join(entry_actions).lower()
+    
+    # Find the best matching pattern
+    best_match = "loading"  # default
+    best_score = 0
+    
+    for pattern, name in CONTEXT_AWARE_PATTERNS.items():
+        if pattern in combined:
+            # Score by pattern length (longer = more specific = better)
+            score = len(pattern)
+            if score > best_score:
+                best_score = score
+                best_match = name
+    
+    return best_match
+
+
+def _add_emergency_exits(states_dict: dict, parent_name: str = "") -> None:
+    """Add emergency exit transitions for states that don't have a way back.
+    
+    If a state has entry actions but NO transitions that lead back to the main flow,
+    add a default GO_BACK → navigation.app_idle transition.
+    
+    This prevents the "Ghost Ship" problem where states exist but you can't leave them.
+    
+    Args:
+        states_dict: The states dict to process
+        parent_name: Current path prefix
+    """
+    for name, config in states_dict.items():
+        full_name = f"{parent_name}.{name}" if parent_name else name
+        
+        # Skip auto-generated sub_states
+        if name in AUTO_GENERATED_SUB_STATES:
+            continue
+        
+        transitions = config.get("on", {})
+        sub_states = config.get("states", {})
+        
+        # Check if this state has any exit transitions
+        has_exit = False
+        for event, target in transitions.items():
+            target_str = target if isinstance(target, str) else target.get("target", "")
+            # Check if target goes somewhere meaningful (not just self or parent)
+            if target_str and target_str != name and target_str != ".":
+                has_exit = True
+                break
+        
+        # If no exit transitions and this is a real state (has entry actions), add emergency exit
+        entry_actions = config.get("entry", [])
+        if entry_actions and not has_exit and not sub_states:
+            transitions["GO_BACK"] = "#navigation.app_idle"
+            transitions["CANCEL"] = "#navigation.app_idle"
+        
+        # Recurse into sub_states
+        if sub_states:
+            _add_emergency_exits(sub_states, full_name)
+
+
+def _auto_inject_sub_states(machine: dict) -> dict:
+    """Auto-inject loading/ready/error sub_states for states that need them.
+    
+    This is called by compile_machine to ensure every meaningful state has
+    the loading → ready → error pattern, even if the LLM didn't generate it.
+    
+    CONTEXT-AWARE: Instead of always using 'loading', reads entry_actions to
+    determine specific names:
+    - calculateCluster → 'calculating'
+    - fetchGroupsData → 'fetching'
+    - submitGroup → 'submitting'
+    
+    A state needs sub_states if:
+    - It has entry actions (indicates it's a real screen/workflow)
+    - It has transitions (needs error handling)
+    - It's NOT already a loading/ready/error sub_state
+    
+    Args:
+        machine: The state machine dict
+    
+    Returns:
+        Machine with auto-injected sub_states
+    """
+    states = machine.get("states", {})
+    
+    def _inject_recursive(states_dict: dict, parent_name: str = "", depth: int = 0) -> None:
+        # Prevent infinite recursion
+        if depth > 5:
+            return
+        
+        for name, config in list(states_dict.items()):
+            full_name = f"{parent_name}.{name}" if parent_name else name
+            
+            # Skip auto-generated sub_states (loading, ready, error)
+            if name in AUTO_GENERATED_SUB_STATES:
+                continue
+            
+            # Skip if already has sub_states
+            if "states" in config and config["states"]:
+                # Recurse into existing sub_states
+                _inject_recursive(config["states"], full_name, depth + 1)
+                continue
+            
+            # Check if this state needs sub_states
+            entry_actions = config.get("entry", [])
+            exit_actions = config.get("exit", [])
+            transitions = config.get("on", {})
+            
+            needs_sub_states = (
+                len(entry_actions) > 0 or  # Has entry actions
+                len(transitions) > 0       # Has transitions
+            )
+            
+            if not needs_sub_states:
+                continue
+            
+            # Context-aware: detect specific sub_state name from entry_actions
+            loading_name = _detect_context_aware_name(entry_actions)
+            
+            # Generate sub_states
+            sub_states = {}
+            
+            # 1. Context-aware loading sub-state (e.g., 'calculating', 'fetching')
+            sub_states[loading_name] = {
+                "entry": ["showLoading", f"fetch{full_name.title().replace('.', '')}"],
+                "exit": ["hideLoading"],
+                "on": {
+                    "DATA_LOADED": ".ready",
+                    "LOAD_FAILED": ".error",
+                    "TIMEOUT": ".error"
+                }
+            }
+            
+            # 2. ready sub-state
+            sub_states["ready"] = {
+                "entry": list(entry_actions) if entry_actions else [f"show{full_name.title().replace('.', '')}"],
+                "exit": list(exit_actions) if exit_actions else [f"hide{full_name.title().replace('.', '')}"],
+                "on": dict(transitions)  # Copy existing transitions
+            }
+            
+            # 3. error sub-state
+            exit_target = _find_exit_target(full_name)
+            sub_states["error"] = {
+                "entry": ["logError", "showErrorBanner"],
+                "exit": ["hideErrorBanner"],
+                "on": {
+                    "RETRY": f".{loading_name}",  # Retry goes back to context-aware loading
+                    "CANCEL": f"#{exit_target}"
+                }
+            }
+            
+            # Update config
+            config["initial"] = loading_name
+            config["states"] = sub_states
+            config["on"] = {}  # Clear top-level transitions (moved to ready)
+            
+            # NO recursion into auto-generated sub_states (they're leaf states)
+    
+    _inject_recursive(states)
+    
+    # Add emergency exits for states without a way back
+    _add_emergency_exits(states)
+    
+    return machine
+
+
 def compile_machine(machine: dict) -> dict:
     """Apply all 5 Pattern Compiler rules to a state machine.
     
@@ -926,10 +1230,11 @@ def compile_machine(machine: dict) -> dict:
     
     Order of operations:
     1. Normalize (fix naming issues)
-    2. Specificity Dedup (remove duplicates)
-    3. Error Injection (add error handlers)
-    4. Global Exit (add exit transitions)
-    5. Dead State Cleanup (remove unreachable)
+    2. Auto-inject sub_states (loading/ready/error)
+    3. Specificity Dedup (remove duplicates)
+    4. Error Injection (add error handlers)
+    5. Global Exit (add exit transitions)
+    6. Dead State Cleanup (remove unreachable)
     
     Args:
         machine: Raw LLM-generated state machine
@@ -940,16 +1245,19 @@ def compile_machine(machine: dict) -> dict:
     # Step 1: Normalize naming
     machine = normalize_machine(machine)
     
-    # Step 2: Remove duplicates by specificity
+    # Step 2: Auto-inject sub_states for states that need them
+    machine = _auto_inject_sub_states(machine)
+    
+    # Step 3: Remove duplicates by specificity
     machine = apply_specificity_dedup(machine)
     
-    # Step 3: Inject error handlers (Rule 1)
+    # Step 4: Inject error handlers (Rule 1)
     machine = apply_error_injection(machine)
     
-    # Step 4: Inject global exit (Rule 5)
+    # Step 5: Inject global exit (Rule 5)
     machine = apply_global_exit(machine)
     
-    # Step 5: Clean up dead states (Rule 4)
+    # Step 6: Clean up dead states (Rule 4)
     machine = apply_dead_state_cleanup(machine)
     
     return machine

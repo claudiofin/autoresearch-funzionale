@@ -372,6 +372,47 @@ Rules:
     Without this, the workflow stays "active" forever and blocks the app.
     This is a HARD REQUIREMENT - no exceptions.
 
+26. MINIMUM 3 TRANSITIONS PER STATE (NO INFINITE LOOPS):
+    Every state you create MUST have at least 3 exit transitions in the "transitions" array.
+    If a state naturally has fewer than 3, ADD these default transitions:
+    - GO_BACK → previous state in the flow, or "none" if it's a top-level state
+    - CANCEL → app_idle (with guard "!hasPreviousState") or success (with guard "hasPreviousState")
+    - NAVIGATE_DASHBOARD → #navigation.success.dashboard (for workflow states)
+    
+    ⚠️ CRITICAL — NO INFINITE LOOPS:
+    - NEVER create a transition that goes back to the SAME state (e.g., "discovery" → "discovery")
+    - NEVER create circular loops just to reach 3 transitions (e.g., A→B→C→A)
+    - Every transition MUST go to a DIFFERENT state or a clearly defined parent/sibling
+    - The Validator (rule 2.5) will flag infinite loops — don't let it happen
+    - If you can't find 3 UNIQUE destinations, use GO_BACK/CANCEL/NAVIGATE_DASHBOARD as defaults
+    
+    States with < 3 transitions will be flagged as INCOMPLETE by the Critic.
+    This applies to ALL states: navigation states, workflow micro-states, error states, etc.
+
+27. GUARDS ARE MANDATORY, NOT OPTIONAL:
+    For EVERY conditional transition, you MUST specify the guard explicitly:
+    - ON_SUCCESS with guard "hasData" → success
+    - ON_SUCCESS with guard "!hasData" → empty
+    - RETRY_FETCH with guard "canRetry" → loading
+    - RETRY_FETCH with guard "!canRetry" → session_expired
+    - CANCEL with guard "hasPreviousState" → success
+    - CANCEL with guard "!hasPreviousState" → app_idle
+    
+    Transitions without guards on conditional events are INVALID.
+    The "guard" field MUST be present in the transition object.
+
+28. DEEP STRUCTURAL ANALYSIS:
+    Before generating JSON, analyze the context for:
+    - All user roles (Owner, Veterinarian) → different permissions and screens
+    - All screens/pages → each needs a sub-state under success
+    - All workflows → each needs 3-5 steps with transitions
+    - All error scenarios → each needs error state with retry
+    - All navigation paths → each needs NAVIGATE_* events
+    - All micro-operations (filters, search, like, add-to-cart) → internal transitions
+    
+    Spend time thinking. The output must be COMPLETE, not partial.
+    If the context mentions a feature, you MUST create states and transitions for it.
+
 CRITICAL - DO NOT USE THESE REDUNDANT EVENTS (use the consolidated alternatives):
 - DATA_LOADED, DATA_FETCHED -> use ON_SUCCESS (with guard "hasData")
 - FETCH_ERROR, FETCH_FAILED, TIMEOUT, TIMEOUT_FETCH, ERROR -> use ON_ERROR
@@ -426,11 +467,11 @@ TRANSITION FORMAT:
                 content = _call_llm_streaming_no_thinking(
                     client, model,
                     "You are an expert Product Manager specializing in state machines. Respond ONLY with valid JSON. Start with { and end with }. No markdown, no extra text.",
-                    prompt, 0.3, 8192, 180
+                    prompt, 0.3, 8192, 600
                 )
             else:
                 response = client.chat.completions.create(
-                    timeout=180,
+                    timeout=600,
                     model=model,
                     messages=[
                         {"role": "system", "content": "You are an expert Product Manager specializing in state machines. Respond ONLY with valid JSON. Start with { and end with }. No markdown, no extra text."},
