@@ -219,7 +219,7 @@ def _bfs_reachable(machine: dict) -> set:
         # Add transition targets to queue
         transitions = current.get("on", {})
         for event, target in transitions.items():
-            target_str = target if isinstance(target, str) else target.get("target", "")
+            target_str = _extract_target_string(target)
             if target_str:
                 # Resolve relative targets
                 if target_str.startswith("."):
@@ -1429,6 +1429,38 @@ def _find_emergency_exit_target(machine: dict) -> str:
     return "app_idle"
 
 
+def _extract_target_string(target) -> str:
+    """Extract a target string from a transition target, handling all formats.
+    
+    Handles:
+    - String: "loading" → "loading"
+    - Dict: {"target": "loading", "cond": "canRetry"} → "loading"
+    - List: [{"target": "loading", "cond": "canRetry"}, ...] → "loading" (first)
+    
+    Args:
+        target: Target in any format (str, dict, or list)
+    
+    Returns:
+        Target string, or empty string if not found
+    """
+    if isinstance(target, str):
+        return target
+    elif isinstance(target, dict):
+        return target.get("target", "")
+    elif isinstance(target, list):
+        # Multi-target: extract first target string
+        for item in target:
+            if isinstance(item, dict):
+                t = item.get("target", "")
+                if t:
+                    return t
+            elif isinstance(item, str):
+                if item:
+                    return item
+        return ""
+    return ""
+
+
 def _add_emergency_exits(states_dict: dict, machine: dict, parent_name: str = "") -> None:
     """Add emergency exit transitions for states that don't have a way back.
     
@@ -1457,7 +1489,7 @@ def _add_emergency_exits(states_dict: dict, machine: dict, parent_name: str = ""
         # Check if this state has any exit transitions
         has_exit = False
         for event, target in transitions.items():
-            target_str = target if isinstance(target, str) else target.get("target", "")
+            target_str = _extract_target_string(target)
             # Check if target goes somewhere meaningful (not just self or parent)
             if target_str and target_str != name and target_str != ".":
                 has_exit = True
@@ -1697,7 +1729,7 @@ def _fix_workflows_none_target(target: str, machine: dict) -> str:
     return target
 
 
-def _fix_nonexistent_targets(target: str, machine: dict) -> str:
+def _fix_nonexistent_targets(target: str, machine: dict, source_branch: str = "") -> str:
     """Fix targets that reference non-existent branches/states.
     
     STRUCTURAL: maps common LLM errors to correct paths.
@@ -1705,10 +1737,12 @@ def _fix_nonexistent_targets(target: str, machine: dict) -> str:
     - success.dashboard → navigation.success (success is a state in navigation, not a branch)
     - success.catalog → navigation.success
     - active_active_workflows.none → active_workflows.none (double prefix)
+    - authenticating → navigation.authenticating (bare state name)
     
     Args:
         target: Target string
         machine: The full state machine dict
+        source_branch: The branch where the source state lives (for bare name resolution)
     
     Returns:
         Fixed target
@@ -1753,6 +1787,39 @@ def _fix_nonexistent_targets(target: str, machine: dict) -> str:
         nav_states = nav.get("states", {})
         if "error" in nav_states:
             return "navigation.error"
+    
+    # Fix bare state names (no dot, not a branch name)
+    # Examples: "authenticating" → "navigation.authenticating"
+    #           "app_idle" → "navigation.app_idle"
+    if "." not in target and not target.startswith("#") and not target.startswith("^"):
+        # Check if it's a branch name (don't fix branch names)
+        if target in states:
+            return target  # It's a branch, leave it alone
+        
+        # Try to find it in the source branch first
+        if source_branch and source_branch in states:
+            branch_config = states[source_branch]
+            branch_states = branch_config.get("states", {})
+            if target in branch_states:
+                return f"{source_branch}.{target}"
+        
+        # Try navigation branch (most common case)
+        nav = states.get("navigation", {})
+        nav_states = nav.get("states", {})
+        if target in nav_states:
+            return f"navigation.{target}"
+        
+        # Try active_workflows branch
+        wf = states.get("active_workflows", {})
+        wf_states = wf.get("states", {})
+        if target in wf_states:
+            return f"active_workflows.{target}"
+        
+        # Try workflows branch
+        wf_old = states.get("workflows", {})
+        wf_old_states = wf_old.get("states", {})
+        if target in wf_old_states:
+            return f"workflows.{target}"
     
     return target
 
@@ -1849,6 +1916,7 @@ def apply_target_resolution(machine: dict) -> dict:
     - #workflows.none → active_workflows.none (branch name fix)
     - success.dashboard → navigation.success (non-existent branch fix)
     - active_active_workflows.none → active_workflows.none (double prefix fix)
+    - authenticating → navigation.authenticating (bare state name)
     - Creates placeholder states for any target that doesn't exist
     
     Args:
@@ -1863,10 +1931,15 @@ def apply_target_resolution(machine: dict) -> dict:
         for name, config in list(states_dict.items()):
             full_path = f"{prefix}.{name}" if prefix else name
             
+            # Extract source branch for bare name resolution
+            source_branch = ""
+            if "." in full_path:
+                source_branch = full_path.split(".")[0]
+            
             # Process transitions
             transitions = config.get("on", {})
             for event, target in list(transitions.items()):
-                target_str = target if isinstance(target, str) else target.get("target", "")
+                target_str = _extract_target_string(target)
                 
                 if not target_str:
                     continue
@@ -1884,14 +1957,20 @@ def apply_target_resolution(machine: dict) -> dict:
                 # Step 2: Fix workflows.none
                 resolved = _fix_workflows_none_target(resolved, machine)
                 
-                # Step 3: Fix non-existent targets (success.X, double prefix, etc.)
-                resolved = _fix_nonexistent_targets(resolved, machine)
+                # Step 3: Fix non-existent targets (success.X, double prefix, bare names, etc.)
+                resolved = _fix_nonexistent_targets(resolved, machine, source_branch)
                 
                 # Step 4: Update the transition
                 if isinstance(target, str):
                     transitions[event] = resolved
                 elif isinstance(target, dict):
                     target["target"] = resolved
+                elif isinstance(target, list):
+                    # Multi-target: update first target's target field
+                    for item in target:
+                        if isinstance(item, dict):
+                            item["target"] = resolved
+                            break
                 
                 # Step 5: Create placeholder if target doesn't exist
                 if not _ensure_target_exists(resolved, full_path, machine):

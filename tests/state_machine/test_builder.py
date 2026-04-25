@@ -43,7 +43,7 @@ class TestGenerateBaseMachine:
     def test_states_has_parallel_branches(self):
         machine = generate_base_machine(use_parallel=True)
         assert "navigation" in machine["states"]
-        assert "workflows" in machine["states"]
+        assert "active_workflows" in machine["states"]
 
 
 class TestFormatXStateActions:
@@ -302,7 +302,7 @@ class TestNormalizeMachine:
         machine = generate_base_machine(use_parallel=True)
         assert machine["type"] == "parallel"
         assert "navigation" in machine["states"]
-        assert "workflows" in machine["states"]
+        assert "active_workflows" in machine["states"]
 
     def test_parallel_architecture_initial_in_navigation(self):
         machine = generate_base_machine(use_parallel=True)
@@ -310,7 +310,7 @@ class TestNormalizeMachine:
 
     def test_parallel_architecture_workflows_starts_with_none(self):
         machine = generate_base_machine(use_parallel=True)
-        assert "none" in machine["states"]["workflows"]["states"]
+        assert "none" in machine["states"]["active_workflows"]["states"]
 
     def test_flat_architecture_no_parallel_type(self):
         machine = generate_base_machine(use_parallel=False)
@@ -354,8 +354,8 @@ class TestAddTransitionsToBranch:
             {"from_state": "app_idle", "to_state": "loading", "event": "START_APP"}
         ])
         nav = machine["states"]["navigation"]["states"]
-        # Target is resolved to canonical path
-        assert nav["app_idle"]["on"]["START_APP"] == "navigation.loading"
+        # Target is resolved as sibling within the navigation branch
+        assert nav["app_idle"]["on"]["START_APP"] == "loading"
 
     def test_transition_with_guard_in_navigation(self):
         machine = self._make_parallel_machine()
@@ -369,8 +369,8 @@ class TestAddTransitionsToBranch:
         ])
         nav = machine["states"]["navigation"]["states"]
         trans = nav["loading"]["on"]["ON_SUCCESS"]
-        # Target is resolved to canonical path
-        assert trans["target"] == "navigation.success"
+        # Target is resolved as sibling within the navigation branch
+        assert trans["target"] == "success"
         assert trans["cond"] == "hasData"
 
     def test_dot_notation_in_navigation_branch(self):
