@@ -150,6 +150,42 @@ Rules:
     - DO NOT use "workflows.X" if the branch is "active_workflows"
     - DO NOT use "nav.X" if the branch is "navigation"
 
+21. EVERY ERROR STATE MUST HAVE CONDITIONAL RETRY WITH GUARDS:
+    - For EVERY error state (or error_handler sub-state), you MUST generate TWO RETRY transitions:
+      a) RETRY_FETCH with guard "canRetry" → goes back to the loading state of the same parent
+      b) RETRY_FETCH with guard "!canRetry" → goes to session_expired or max_retries_exceeded state
+    - The guard "canRetry" means: context.retryCount < 3 (user can retry up to 3 times)
+    - When the positive retry branch is taken, use action "incrementRetryCount" to update context
+    - This is UNIVERSAL — every error state in every app needs this pattern
+    
+    EXAMPLE (follow this exact pattern for every error state):
+    - {{"from_state": "error", "to_state": "loading", "event": "RETRY_FETCH", "guard": "canRetry", "actions": ["incrementRetryCount"]}}
+    - {{"from_state": "error", "to_state": "session_expired", "event": "RETRY_FETCH", "guard": "!canRetry"}}
+    - {{"from_state": "error", "to_state": "app_idle", "event": "CANCEL"}}
+
+22. USE CONTEXT-AWARE ACTIONS FOR STATE MUTATIONS:
+    - These actions are UNIVERSAL and work for any app:
+      * "incrementRetryCount" → assign {{ retryCount: ctx.retryCount + 1 }}
+      * "setPreviousState" → assign {{ previousState: meta.state.value }}
+      * "clearErrors" → assign {{ errors: [] }}
+      * "resetRetryCount" → assign {{ retryCount: 0 }}
+    - Use "incrementRetryCount" on retry transitions (paired with guard "canRetry")
+    - Use "setPreviousState" on navigation transitions that go deeper into the app
+    - Use "clearErrors" when entering a fresh loading state
+    - Use "resetRetryCount" when the user successfully completes an operation
+
+23. EVERY WORKFLOW STEP MUST HAVE EMERGENCY EXITS:
+    - For states inside the active_workflows branch (benchmark, purchase_group, price_alert, etc.),
+      add these emergency transitions:
+      a) SESSION_EXPIRED → navigation.session_expired (user's auth token expired mid-workflow)
+      b) NETWORK_LOST → navigation.error (network disconnected mid-workflow)
+    - These events allow the state machine to gracefully exit a workflow if the app state changes
+    - This is UNIVERSAL — every workflow in every app can be interrupted by session expiry or network loss
+    
+    EXAMPLE (add these to every workflow step's "on" transitions):
+    - {{"from_state": "benchmark.discovery", "to_state": "navigation.session_expired", "event": "SESSION_EXPIRED"}}
+    - {{"from_state": "benchmark.discovery", "to_state": "navigation.error", "event": "NETWORK_LOST"}}
+
 CRITICAL - DO NOT USE THESE REDUNDANT EVENTS (use the consolidated alternatives):
 - DATA_LOADED, DATA_FETCHED -> use ON_SUCCESS (with guard "hasData")
 - FETCH_ERROR, FETCH_FAILED, TIMEOUT, TIMEOUT_FETCH, ERROR -> use ON_ERROR
