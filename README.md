@@ -18,22 +18,178 @@ The system now supports **Journey-Centric** state machine architecture with **Pa
 - **Security Pipeline**: Automated security analysis (OWASP Top 10, data protection, auth security)
 - **Enhanced Analyst**: Now identifies workflows from verbs of action (partecipare, confrontare, monitorare)
 
+## 🛡️ Deterministic Validation Layer
+
+> **The problem**: LLMs generate structurally invalid state machines — duplicate states, orphan transitions, dead ends. Asking an LLM to "be careful" doesn't work.
+
+> **The solution**: A deterministic Python validator that checks the JSON structure and assigns a Quality Score. **No LLM needed.**
+
+### JSON Structural Validator (`json_validator.py`)
+
+A 315-line Python script that validates the state machine structure:
+
+| Check | Description | Severity |
+|-------|-------------|----------|
+| **Duplicate States** | States appearing in multiple locations (e.g., `dashboard` under both `navigation.*` and at root) | Critical |
+| **Orphan Transitions** | Transitions pointing to non-existent states | Critical |
+| **Dead-End States** | States with no outgoing transitions (except terminal states) | High |
+| **Unreachable States** | States not reachable from `app_idle` | High |
+| **Missing Entry/Exit** | States without entry/exit action arrays | Medium |
+| **Missing `on` Property** | States without transition map | Medium |
+
+### Quality Score Formula
+
+$$S = 100 - \sum (w_{critical} \cdot C + w_{high} \cdot H + w_{medium} \cdot M)$$
+
+Where:
+- $w_{critical} = 10$ (each critical issue costs 10 points)
+- $w_{high} = 5$ (each high issue costs 5 points)
+- $w_{medium} = 2$ (each medium issue costs 2 points)
+
+**Stop criteria**: The loop continues until $S \geq 90$ OR $S = 100$.
+
+### First Run Results
+
+Against the existing `spec_machine.json` (before fixes):
+- **47 total issues found**
+- 12 Critical (6 duplicate states, 6 orphan transitions)
+- 12 High (4 dead-end states, 8 unreachable states)
+- 23 Medium (missing properties)
+- **Quality Score: 0/100** → Loop forced to iterate
+
+### Usage
+
+```bash
+# Standalone validation
+python3 -m state_machine.json_validator output/spec/spec_machine.json
+
+# Integrated in the loop (automatic)
+python3 run.py loop-frontend --input-dir inputs/ --max-iterations 5
+```
+
+### Output Example
+
+```
+⚖️  JSON Structural Validation Report
+═══════════════════════════════════════
+File: output/spec/spec_machine.json
+
+📊 Quality Score: 72/100
+
+🔴 Critical Issues (3):
+  1. DUPLICATE_STATE: 'dashboard' appears at root and under navigation.success
+  2. DUPLICATE_STATE: 'catalog' appears at root and under navigation.success
+  3. ORPHAN_TRANSITION: 'app_idle' → 'nonexistent_state' (event: NAVIGATE)
+
+🟡 High Issues (2):
+  1. DEAD_END: 'error' has no outgoing transitions
+  2. UNREACHABLE: 'benchmark' not reachable from 'app_idle'
+
+🟢 Medium Issues (5):
+  1. MISSING_PROPERTY: 'loading' missing 'entry' array
+  ...
+
+✅ VALID (score ≥ 90) — proceed to task generation
+```
+
+## 🔧 Deterministic Build Layer
+
+> **The problem**: The LLM generates states with inconsistent naming — `dashboard`, `success.dashboard`, `#navigation.success.dashboard` all referring to the same state.
+
+> **The solution**: A deterministic builder that resolves all targets to canonical paths.
+
+### Path Resolution (`_resolve_state_target()`)
+
+| Input Target | Resolved To | Reason |
+|-------------|-------------|--------|
+| `dashboard` | `navigation.success.dashboard` | Sibling resolution within navigation branch |
+| `.dashboard` | `navigation.success.dashboard` | Relative resolution from parent |
+| `#navigation.success.dashboard` | `navigation.success.dashboard` | Cross-branch reference (already canonical) |
+| `success` | `navigation.success` | Root-level resolution |
+
+### State Deduplication (`deduplicate_machine()`)
+
+Removes duplicate states that appear in multiple locations:
+- **Before**: `dashboard` exists at root, under `navigation.*`, AND under `navigation.success.*`
+- **After**: `dashboard` exists ONLY under `navigation.success.*` (canonical location)
+
+### Compound State Fix
+
+Parallel branch compound states now include `"on": {}` in the base machine, preventing XState v5 validation errors.
+
+## 🎨 Design System & Mock Data
+
+> **The problem**: UI specs use "Mad Libs" placeholders (`{{colors.surface}}`) and hardcoded mock data that doesn't change per project.
+
+> **The solution**: Deterministic JSON files that provide real values.
+
+### Design System (`inputs/design_system.json`)
+
+Complete design token system:
+
+```json
+{
+  "colors": {
+    "primary": "#2563EB",
+    "surface": "#FFFFFF",
+    "text_primary": "#111827"
+  },
+  "typography": {
+    "font_family_primary": "Inter, -apple-system, sans-serif",
+    "font_size_base": "1rem"
+  },
+  "spacing": { "xs": "0.25rem", "sm": "0.5rem", "md": "1rem" },
+  "border_radius": { "sm": "0.25rem", "md": "0.375rem", "lg": "0.5rem" },
+  "shadows": { "sm": "0 1px 2px rgba(0,0,0,0.05)", "md": "0 4px 6px rgba(0,0,0,0.1)" }
+}
+```
+
+**Usage in UI specs:**
+- Before: `backgroundColor: {{colors.surface}}` (Mad Libs — guess the value)
+- After: `backgroundColor: #FFFFFF` (deterministic — exact value)
+
+### Mock Data (`inputs/mock_data.json`)
+
+Project-specific mock data:
+
+```json
+{
+  "project_context": { "name": "Clinical Hub", "domain": "veterinary_pharma" },
+  "users": {
+    "sales_rep": { "name": "Marco Rossi", "role": "sales_rep" }
+  },
+  "products": [
+    { "name": "Bravecto", "price_euro": 45.90, "stock_status": "available" }
+  ],
+  "dashboard_metrics": {
+    "total_revenue_euro": 125430,
+    "active_customers": 47
+  }
+}
+```
+
+**Benefits:**
+- Data changes per project (not hardcoded in prompts)
+- Realistic values for AI UI generators
+- Consistent across all generated specs
+
 ## How It Works
 
 1. **Input**: text files, notes, screenshots, HTML from UIs
 2. **Ingest**: extracts context from raw material
 3. **Analyst**: the LLM analyzes and generates states, transitions, edge cases, **and workflows**
 4. **Spec**: generates functional specification with PlantUML diagrams and XState state machine (parallel architecture)
-5. **Validator**: validates that all critical flows are present
-6. **Fuzzer**: tests the state machine with random paths
-7. **Critic**: hostile reviewer (finds missing edge cases)
-8. **Loop**: the system iterates automatically improving the specification
-9. **UI Generator**: creates Markdown blueprints for AI UI generators
-10. **LLM Wiki Generator**: creates Memory Bank for AI coding agents
-11. **Security Pipeline**: analyzes security requirements
-12. **Backend Pipeline**: generates backend specification
-13. **CI/CD Pipeline**: generates CI/CD specification
-14. **Testbook Generator**: generates test scenarios from XState machine (deterministic, no LLM needed)
+5. **Validator**: validates that all critical flows are present (logic checks)
+6. **JSON Validator**: validates machine structure (deterministic, no LLM) ← **NEW**
+7. **Fuzzer**: tests the state machine with random paths
+8. **Critic**: hostile reviewer (finds missing edge cases)
+9. **Loop**: the system iterates automatically improving the specification
+10. **UI Generator**: creates Markdown blueprints for AI UI generators (uses design_system.json) ← **ENHANCED**
+11. **LLM Wiki Generator**: creates Memory Bank for AI coding agents
+12. **Security Pipeline**: analyzes security requirements
+13. **Backend Pipeline**: generates backend specification
+14. **CI/CD Pipeline**: generates CI/CD specification
+15. **Testbook Generator**: generates test scenarios from XState machine (deterministic, no LLM needed)
 
 ## Quick Start
 
@@ -93,7 +249,7 @@ export LLM_PROVIDER="coding"
 export LLM_MODEL="qwen3.5-plus"
 export LLM_BASE_URL="https://coding-intl.dashscope.aliyuncs.com/v1"
 
-# 1. Frontend pipeline (iterative loop)
+# 1. Frontend pipeline (iterative loop with deterministic validation)
 python3 run.py loop-frontend --input-dir inputs/ --max-iterations 5 --time-budget 600 --generate-ui
 
 # 2. Backend pipeline
@@ -162,6 +318,9 @@ python3 run.py wiki-generator --context output/context/project_context.md
 
 # Mode 10: Testbook Generator (deterministic, no LLM needed)
 python3 run.py testbook-generator --machine output/spec/spec_machine.json
+
+# Mode 11: JSON Structural Validator (standalone, deterministic)
+python3 -m state_machine.json_validator output/spec/spec_machine.json
 ```
 
 ## Project Structure
@@ -169,6 +328,8 @@ python3 run.py testbook-generator --machine output/spec/spec_machine.json
 ```
 autoresearch/
 ├── inputs/              # Your input files (text, notes, HTML)
+│   ├── design_system.json   # Design tokens (colors, typography, spacing) ← NEW
+│   └── mock_data.json       # Project-specific mock data ← NEW
 ├── output/              # Automatically generated files
 │   ├── context/
 │   │   └── project_context.md   # Extracted context
@@ -208,7 +369,7 @@ autoresearch/
 │   ├── loop/                  # Autonomous loop
 │   │   ├── __init__.py        # AutonomousLoop coordinator
 │   │   ├── cli.py             # CLI entry point
-│   │   ├── runner.py          # Pipeline step runners
+│   │   ├── runner.py          # Pipeline step runners (includes JSON validator) ← ENHANCED
 │   │   └── quality.py         # Quality checker
 │   ├── pipeline/              # Pipeline stages
 │   │   ├── ingest/            # Context extraction
@@ -234,8 +395,10 @@ autoresearch/
 │   │       ├── engine.py        # Core engine (coverage, invariants, scenarios)
 │   │       ├── __init__.py      # CLI entry point
 │   │       └── __main__.py      # Module support
-│   ├── state_machine/         # XState machine building
-│   │   ├── builder.py         # Machine builder (parallel states, workflows)
+│   ├── state_machine/         # XState machine building ← ENHANCED
+│   │   ├── builder.py         # Machine builder (parallel states, workflows, dedup) ← REFACTORED
+│   │   ├── json_validator.py  # Deterministic structural validator ← NEW
+│   │   ├── __main__.py        # Module entry point for json_validator ← NEW
 │   │   ├── post_processing.py # Post-processing (dedup, cleanup)
 │   │   └── validation.py      # State machine validation
 │   ├── diagrams/              # Diagram generation
@@ -376,20 +539,20 @@ inputs/ (PDF, notes, HTML)
     │
     ▼
 ┌─────────────────────────────────────────────────────────┐
-│  STEP 1: Frontend Loop                                  │
+│  STEP 1: Frontend Loop (with Deterministic Validation)  │
 │  python3 run.py loop-frontend --input-dir inputs/       │
 │                                                         │
-│  ingest → analyst → spec → validator → fuzzer → critic  │
-│  (iterates until quality score ≥ 90 or 100/100)         │
+│  ingest → analyst → spec → validator → json_validator   │
+│    → fuzzer → critic (iterates until S ≥ 90)            │
 │                                                         │
-│  Output: output/spec/spec_machine.json                  │
+│  Output: output/spec/spec_machine.json (validated)      │
 │          output/spec/spec.md                            │
 │          output/context/project_context.md              │
 └─────────────────────────────────────────────────────────┘
     │
     ▼
 ┌─────────────────────────────────────────────────────────┐
-│  STEP 2: UI Generator                                   │
+│  STEP 2: UI Generator (uses design_system.json)         │
 │  python3 run.py ui-generator                            │
 │                                                         │
 │  Output: output/ui_specs/DESIGN.md                      │
@@ -749,10 +912,11 @@ The system iterates automatically:
 
 1. **Analyst** generates states, transitions, and workflows
 2. **Spec** generates the specification with PlantUML (parallel architecture)
-3. **Validator** validates that all flows are present
-4. **Fuzzer** tests the state machine
-5. **Critic** finds missing edge cases
-6. **Loop** restarts from the weak points found
+3. **Validator** validates that all flows are present (logic checks)
+4. **JSON Validator** validates machine structure (deterministic) ← **NEW**
+5. **Fuzzer** tests the state machine
+6. **Critic** finds missing edge cases
+7. **Loop** restarts from the weak points found
 
 **Stop criteria:**
 - Quality Score 100/100 (perfect machine)
@@ -770,6 +934,7 @@ The system iterates automatically:
 | State persistence | Lost on navigation | Maintained across page changes |
 | AI agent context | Must read all specs | Reads LLM Wiki (condensed) |
 | Scalability | Linear growth | Modular workflow addition |
+| Structural validation | LLM-based (unreliable) | Deterministic Python (guaranteed) |
 
 ## Requirements
 

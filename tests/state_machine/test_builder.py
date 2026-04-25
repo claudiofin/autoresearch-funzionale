@@ -339,7 +339,8 @@ class TestAddTransitionsToBranch:
             {"from_state": "app_idle", "to_state": "loading", "event": "START_APP"}
         ])
         nav = machine["states"]["navigation"]["states"]
-        assert nav["app_idle"]["on"]["START_APP"] == "loading"
+        # Target is resolved to canonical path
+        assert nav["app_idle"]["on"]["START_APP"] == "navigation.loading"
 
     def test_transition_with_guard_in_navigation(self):
         machine = self._make_parallel_machine()
@@ -353,7 +354,8 @@ class TestAddTransitionsToBranch:
         ])
         nav = machine["states"]["navigation"]["states"]
         trans = nav["loading"]["on"]["ON_SUCCESS"]
-        assert trans["target"] == "success"
+        # Target is resolved to canonical path
+        assert trans["target"] == "navigation.success"
         assert trans["cond"] == "hasData"
 
     def test_dot_notation_in_navigation_branch(self):

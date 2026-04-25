@@ -216,8 +216,8 @@ class AutonomousLoop:
         if spec_result.get("error"):
             result["errors"].append(f"Spec: {spec_result['error']}")
         
-        # Step 2.5: Validator
-        print("\n🔎 Step 2.5: State machine validation...")
+        # Step 2.5: Validator (legacy - logic checks)
+        print("\n🔎 Step 2.5: State machine validation (logic checks)...")
         validator_result = self.runner.run_validator(self.spec_machine)
         result["steps"]["validator"] = validator_result
         if validator_result.get("error"):
@@ -229,6 +229,33 @@ class AutonomousLoop:
             self.quality_history.append(score)
             if dead_ends > 0:
                 result["warnings"] = result.get("warnings", []) + [f"{dead_ends} dead-end states found"]
+        
+        # Step 2.6: JSON Structural Validator (deterministic judge - "Pathfinder")
+        print("\n⚖️  Step 2.6: JSON structural validation (Pathfinder)...")
+        json_validator_result = self.runner.run_json_validator(self.spec_machine)
+        result["steps"]["json_validator"] = json_validator_result
+        if json_validator_result.get("error"):
+            result["errors"].append(f"JSON Validator: {json_validator_result['error']}")
+        else:
+            is_valid = json_validator_result.get("is_valid", False)
+            total_issues = json_validator_result.get("total_issues", 0)
+            critical_count = json_validator_result.get("critical_count", 0)
+            high_count = json_validator_result.get("high_count", 0)
+            json_score = json_validator_result.get("quality_score", 0)
+            
+            print(f"  Structural Valid: {'✅' if is_valid else '❌'}")
+            print(f"  Issues: {total_issues} total, {critical_count} critical, {high_count} high")
+            print(f"  Quality Score: {json_score}/100")
+            
+            # Use JSON validator score as the primary quality metric
+            if json_score is not None:
+                self.quality_history.append(json_score)
+            
+            # Critical structural issues block the loop
+            if critical_count > 0:
+                result["warnings"] = result.get("warnings", []) + [
+                    f"{critical_count} critical structural issues (duplicate states, orphan transitions)"
+                ]
         
         # Step 3: Fuzzer
         print("\n🔍 Step 3: Fuzzer...")

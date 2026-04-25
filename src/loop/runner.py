@@ -246,6 +246,98 @@ class FrontendRunner:
             "exit_code": result.get("returncode", 0)
         }
     
+    def run_json_validator(self, spec_machine: str) -> dict:
+        """Runs the JSON structural validator (deterministic judge).
+        
+        This is the "Pathfinder" - it validates the machine structure
+        before it's handed off to code generators.
+        
+        Returns:
+            Dict with validation results including:
+            - is_valid: True if no critical/high issues
+            - quality_score: 0-100 score
+            - duplicate_count: Number of duplicate states
+            - orphan_count: Number of orphan transitions
+            - dead_end_count: Number of dead-end states
+            - total_issues: Total number of issues
+        """
+        try:
+            env = os.environ.copy()
+            env["PYTHONPATH"] = SRC_DIR
+            result = subprocess.run(
+                ["python3", "-m", "state_machine.json_validator", spec_machine],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env=env,
+                cwd=PROJECT_ROOT
+            )
+            
+            if result.stdout:
+                for line in result.stdout.strip().split("\n"):
+                    if line.strip():
+                        print(f"  {line}")
+            if result.stderr:
+                for line in result.stderr.strip().split("\n"):
+                    if line.strip():
+                        print(f"  [stderr] {line}")
+            
+            # Parse the validation report
+            output_text = result.get("stdout", "")
+            quality_score = None
+            total_issues = 0
+            critical_count = 0
+            high_count = 0
+            medium_count = 0
+            is_valid = False
+            
+            for line in output_text.split("\n"):
+                if "Quality Score:" in line:
+                    try:
+                        quality_score = int(line.split(":")[1].strip().split("/")[0])
+                    except:
+                        pass
+                if "Issues Found:" in line:
+                    try:
+                        total_issues = int(line.split(":")[1].strip())
+                    except:
+                        pass
+                if "Critical:" in line:
+                    try:
+                        critical_count = int(line.split(":")[1].strip())
+                    except:
+                        pass
+                if "High:" in line:
+                    try:
+                        high_count = int(line.split(":")[1].strip())
+                    except:
+                        pass
+                if "Medium:" in line:
+                    try:
+                        medium_count = int(line.split(":")[1].strip())
+                    except:
+                        pass
+                if "✅ VALID" in line:
+                    is_valid = True
+                if "❌ INVALID" in line:
+                    is_valid = False
+            
+            return {
+                "success": True,
+                "is_valid": is_valid,
+                "quality_score": quality_score,
+                "total_issues": total_issues,
+                "critical_count": critical_count,
+                "high_count": high_count,
+                "medium_count": medium_count,
+                "exit_code": result.returncode
+            }
+            
+        except subprocess.TimeoutExpired:
+            return {"error": "json_validator timeout", "is_valid": False}
+        except Exception as e:
+            return {"error": str(e), "is_valid": False}
+    
     def run_fuzzer(self, spec_machine: str, fuzz_report: str) -> dict:
         """Runs the Fuzzer."""
         result = self._run_module("fuzzer", ["--machine", spec_machine], timeout=300)

@@ -1,10 +1,14 @@
 """State machine builder - creates XState machine from LLM data.
 
 Handles:
-- Base machine generation
+- Base machine generation (parallel or flat)
 - State config building (flat and hierarchical)
 - Transition addition with guard/action support
 - XState action formatting (assign actions for context updates)
+- State deduplication (prevents "Schizofrenia del JSON")
+
+Key fix: States are now written ONLY to their canonical path.
+No more duplicate states appearing in both navigation.success.X AND as flat states.
 """
 
 import json
@@ -49,8 +53,8 @@ def generate_base_machine(use_parallel: bool = True) -> dict:
     
     Args:
         use_parallel: If True, creates parallel states architecture with
-                     'navigation' and 'active_workflows' branches.
-                     If False, creates flat architecture (legacy).
+                      'navigation' and 'active_workflows' branches.
+                      If False, creates flat architecture (legacy).
     """
     if use_parallel:
         return {
@@ -60,10 +64,12 @@ def generate_base_machine(use_parallel: bool = True) -> dict:
             "states": {
                 "navigation": {
                     "initial": "app_idle",
+                    "on": {},  # ← Added: compound state needs 'on'
                     "states": {}
                 },
                 "active_workflows": {
                     "initial": "none",
+                    "on": {},  # ← Added: compound state needs 'on'
                     "states": {
                         "none": {}
                     }
@@ -134,16 +140,87 @@ def build_state_config(state: dict) -> dict:
     return config
 
 
+def _resolve_state_target(target: str, from_state_path: str, all_state_paths: set) -> str:
+    """Resolve a transition target to its canonical full path.
+    
+    This prevents orphan transitions by resolving relative/sibling references
+    to their actual canonical paths.
+    
+    Args:
+        target: The target string from the transition (e.g., ".dashboard", "success", "#navigation.loading")
+        from_state_path: The full path of the source state
+        all_state_paths: Set of all valid state paths in the machine
+    
+    Returns:
+        The resolved canonical path, or the original target if unresolvable.
+    """
+    if not target:
+        return target
+    
+    # Cross-branch reference (# prefix) - already canonical
+    if target.startswith("#"):
+        return target[1:]
+    
+    # Relative reference (. prefix)
+    if target.startswith("."):
+        parts = from_state_path.split(".")
+        if len(parts) > 1:
+            parent = ".".join(parts[:-1])
+            resolved = f"{parent}{target}"
+            if resolved in all_state_paths:
+                return resolved
+        # Fallback: try as root-level
+        root_target = target[1:]
+        if root_target in all_state_paths:
+            return root_target
+        return target
+    
+    # Absolute reference (contains .)
+    if "." in target:
+        if target in all_state_paths:
+            return target
+        # Try to find the state by searching
+        for path in all_state_paths:
+            if path.endswith(f".{target}"):
+                return path
+        return target
+    
+    # Sibling or root-level reference
+    # First try same parent
+    parts = from_state_path.split(".")
+    if len(parts) > 1:
+        parent = ".".join(parts[:-1])
+        candidate = f"{parent}.{target}"
+        if candidate in all_state_paths:
+            return candidate
+    
+    # Try as root-level
+    if target in all_state_paths:
+        return target
+    
+    # Last resort: search for any state ending with this name
+    for path in all_state_paths:
+        if path.split(".")[-1] == target:
+            return path
+    
+    return target
+
+
 def add_transitions(machine: dict, transitions: list):
     """Add transitions with support for guards and actions.
     
     Handles dot notation for hierarchical states (e.g., success.dashboard).
     Validates transition format and skips invalid entries.
     
+    FIX: Now resolves targets to their canonical paths to prevent orphans.
+    
     Args:
         machine: The state machine dict to modify.
         transitions: List of transition dicts from LLM.
     """
+    # Collect all valid state paths for resolution
+    all_paths = _collect_state_paths(machine.get("states", {}))
+    
     for i, trans in enumerate(transitions):
         # Validate required fields — skip invalid transitions
         if "from_state" not in trans:
@@ -178,15 +255,18 @@ def add_transitions(machine: dict, transitions: list):
                     to_state = f".{to_state}" if "." not in to_state else to_state
         
         if resolved_from in target_dict:
+            # Resolve the target to its canonical path
+            resolved_target = _resolve_state_target(to_state, from_state, all_paths)
+            
             if guard or actions:
-                transition = {"target": to_state}
+                transition = {"target": resolved_target}
                 if guard:
                     transition["cond"] = guard
                 if actions:
                     transition["actions"] = _format_xstate_actions(actions)
                 target_dict[resolved_from]["on"][event] = transition
             else:
-                target_dict[resolved_from]["on"][event] = to_state
+                target_dict[resolved_from]["on"][event] = resolved_target
 
 
 def add_transitions_to_branch(machine: dict, transitions: list):
@@ -195,6 +275,8 @@ def add_transitions_to_branch(machine: dict, transitions: list):
     For parallel architecture, transitions need to be added to the navigation branch.
     Handles dot notation for hierarchical states within the navigation branch.
     
+    FIX: Now resolves targets to their canonical paths to prevent orphans.
+    
     Args:
         machine: The state machine dict (must have parallel structure).
         transitions: List of transition dicts from LLM.
@@ -202,6 +284,9 @@ def add_transitions_to_branch(machine: dict, transitions: list):
     nav_branch = machine.get("states", {}).get("navigation", {})
     if not nav_branch:
         return
+    
+    # Collect all valid state paths for resolution
+    all_paths = _collect_state_paths(machine.get("states", {}))
     
     for i, trans in enumerate(transitions):
         # Validate required fields — skip invalid transitions
@@ -234,15 +319,37 @@ def add_transitions_to_branch(machine: dict, transitions: list):
                     to_state = f".{to_state}" if "." not in to_state else to_state
         
         if resolved_from in target_dict:
+            # Resolve the target to its canonical path
+            resolved_target = _resolve_state_target(to_state, from_state, all_paths)
+            
             if guard or actions:
-                transition = {"target": to_state}
+                transition = {"target": resolved_target}
                 if guard:
                     transition["cond"] = guard
                 if actions:
                     transition["actions"] = _format_xstate_actions(actions)
                 target_dict[resolved_from]["on"][event] = transition
             else:
-                target_dict[resolved_from]["on"][event] = to_state
+                target_dict[resolved_from]["on"][event] = resolved_target
+
+
+def _collect_state_paths(states: dict, prefix: str = "") -> set:
+    """Collect all state paths in the machine for resolution.
+    
+    Args:
+        states: The states dict to traverse
+        prefix: Current path prefix
+    
+    Returns:
+        Set of all state paths (e.g., {"navigation.app_idle", "navigation.success.dashboard"})
+    """
+    paths = set()
+    for name, config in states.items():
+        full_path = f"{prefix}.{name}" if prefix else name
+        paths.add(full_path)
+        if "states" in config and isinstance(config["states"], dict):
+            paths.update(_collect_state_paths(config["states"], full_path))
+    return paths
 
 
 def build_workflow_compound_state(workflow: dict) -> dict:
@@ -341,6 +448,10 @@ def normalize_machine(machine: dict) -> dict:
     
     Handles both parallel and flat architectures.
     
+    FIX: Now also removes duplicate states that appear in multiple locations.
+    The canonical location for navigation states is under navigation.*
+    The canonical location for workflow states is under active_workflows.*
+    
     Args:
         machine: The state machine dict to normalize.
     
@@ -362,6 +473,35 @@ def normalize_machine(machine: dict) -> dict:
         # Fix: ensure app_idle exists
         if "app_idle" not in nav_branch.get("states", {}):
             nav_branch["states"]["app_idle"] = {"entry": [], "exit": [], "on": {}}
+        
+        # FIX: Remove duplicate states that appear at root level
+        # If a state exists both under navigation.* and at root, keep only the navigation.* version
+        root_states = machine.get("states", {})
+        nav_states = nav_branch.get("states", {})
+        
+        # States that should ONLY exist under navigation (not at root)
+        navigation_only_states = {
+            "app_idle", "authenticating", "loading", "success", "empty",
+            "error", "session_expired", "dashboard", "catalog", "offers",
+            "alerts", "benchmark", "active_workflows"
+        }
+        
+        for state_name in navigation_only_states:
+            if state_name in root_states and state_name != "navigation" and state_name != "active_workflows":
+                # This state exists at root level but should only be under navigation
+                # Check if it also exists under navigation
+                if state_name in nav_states:
+                    # Remove the root-level duplicate
+                    del root_states[state_name]
+        
+        # Also clean up states under navigation.success that duplicate navigation.*
+        success_states = nav_states.get("success", {}).get("states", {})
+        if success_states:
+            for state_name in list(success_states.keys()):
+                if state_name in nav_states and state_name in navigation_only_states:
+                    # Remove the duplicate under success
+                    del success_states[state_name]
+    
     else:
         # Handle flat architecture (legacy)
         # Fix: if LLM used 'idle' instead of 'app_idle', normalize
@@ -375,5 +515,79 @@ def normalize_machine(machine: dict) -> dict:
         # Fix: ensure app_idle exists
         if "app_idle" not in machine["states"]:
             machine["states"]["app_idle"] = {"entry": [], "exit": [], "on": {}}
+    
+    return machine
+
+
+def deduplicate_machine(machine: dict) -> dict:
+    """Remove duplicate states from the machine.
+    
+    This is the "Schizofrenia del JSON" fix. When the LLM generates states
+    that appear in multiple locations (e.g., dashboard under both
+    navigation.success.dashboard AND as a flat state), this function
+    keeps only the canonical location.
+    
+    Canonical locations:
+    - Navigation states: navigation.* (not at root, not under navigation.success)
+    - Workflow states: active_workflows.* (not at root, not under navigation.active_workflows)
+    
+    Args:
+        machine: The state machine dict to deduplicate.
+    
+    Returns:
+        Deduplicated machine dict.
+    """
+    if machine.get("type") != "parallel":
+        return machine
+    
+    root_states = machine.get("states", {})
+    nav_branch = root_states.get("navigation", {})
+    nav_states = nav_branch.get("states", {})
+    workflows_branch = root_states.get("active_workflows", {})
+    workflow_states = workflows_branch.get("states", {})
+    
+    # Track which states we've seen and their canonical paths
+    seen_states = {}
+    
+    # First pass: record canonical locations
+    # Navigation states are canonical under navigation.*
+    for name in nav_states:
+        if name not in ("success", "active_workflows"):  # Skip compound containers
+            seen_states[name] = f"navigation.{name}"
+    
+    # Workflow states are canonical under active_workflows.*
+    for name in workflow_states:
+        seen_states[name] = f"active_workflows.{name}"
+    
+    # Second pass: remove duplicates at root level
+    states_to_remove = []
+    for name in root_states:
+        if name in ("navigation", "active_workflows"):
+            continue  # Skip compound containers
+        if name in seen_states:
+            states_to_remove.append(name)
+    
+    for name in states_to_remove:
+        del root_states[name]
+    
+    # Third pass: remove duplicates under navigation.success
+    success_states = nav_states.get("success", {}).get("states", {})
+    if success_states:
+        states_to_remove = []
+        for name in success_states:
+            if name in seen_states:
+                states_to_remove.append(name)
+        for name in states_to_remove:
+            del success_states[name]
+    
+    # Fourth pass: remove duplicates under navigation.active_workflows
+    nav_workflow_states = nav_states.get("active_workflows", {}).get("states", {})
+    if nav_workflow_states:
+        states_to_remove = []
+        for name in nav_workflow_states:
+            if name in seen_states:
+                states_to_remove.append(name)
+        for name in states_to_remove:
+            del nav_workflow_states[name]
     
     return machine
