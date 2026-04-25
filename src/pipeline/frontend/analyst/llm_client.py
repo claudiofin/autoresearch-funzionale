@@ -149,6 +149,44 @@ Every state MUST have at least one exit transition (except the final success sta
 - SESSION_EXPIRED state: must have REAUTHENTICATE transition → loading state, CANCEL → initial state
 
 Verification: for each state you generate, ask yourself "how does the user exit this state?" and add the corresponding transition.
+
+RULE FOR INTERACTIVE SCREENS (COMPOUND STATES):
+For each main screen inside the app (e.g., dashboard, catalog, offers, profile, settings),
+DO NOT create empty/flat states. Each screen MUST be a "Compound State" with its own
+local micro-states for a professional UX:
+
+  - An initial "loading" sub-state (to show local skeleton/shimmer effects)
+  - A "ready" sub-state (data loaded successfully, render the actual content)
+  - An "error" sub-state (to handle API failures scoped to that component only)
+
+Global navigation events (NAVIGATE_*, MAPS_*) MUST stay at the PARENT level (outside
+the compound state's internal "on" block), so the user can switch pages even if a
+component is in local error state.
+
+Example structure for a catalog screen:
+  "catalog": {
+    "initial": "loading",
+    "states": {
+      "loading": {
+        "entry": ["showCatalogShimmer"],
+        "on": { "FETCH_SUCCESS": "ready", "FETCH_ERROR": "error" }
+      },
+      "ready": {
+        "entry": ["renderCatalogGrid"],
+        "on": { "APPLY_FILTER": "loading", "LOCAL_REFRESH": "loading" }
+      },
+      "error": {
+        "entry": ["showInlineErrorCard"],
+        "on": { "RETRY": "loading" }
+      }
+    },
+    "on": {
+      "NAVIGATE_DASHBOARD": "dashboard",
+      "NAVIGATE_OFFERS": "offers"
+    }
+  }
+
+This creates the state path: success.catalog.loading → success.catalog.ready
 """
     
     print(f"  🤖 Calling LLM ({model}){' [streaming]' if use_streaming else ''}, context: {len(context_text)} chars...")

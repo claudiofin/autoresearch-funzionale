@@ -2,10 +2,11 @@
 """
 Wrapper script to execute commands for the automatic functional analysis system.
 
-Three independent pipelines:
+Four independent pipelines:
   FRONTEND:  ingest → analyst → spec → validator → fuzzer → critic → ui_generator
   BACKEND:   architect → critic
   CI/CD:     planner
+  KANBAN:    kanban-task (reads all output/*.md and generates agent-friendly tasks)
 
 Usage:
     # Frontend loop (iterative)
@@ -17,6 +18,11 @@ Usage:
 
     # CI/CD pipeline
     python run.py ci-cd --spec output/spec/spec.md --backend-spec output/backend/backend_spec.md
+
+    # Kanban Task Generator (run AFTER all other pipelines)
+    python run.py kanban-task
+    python run.py kanban-task --dry-run
+    python run.py kanban-task --refine-steps 3
 
     # Individual frontend steps
     python run.py ingest --input-dir inputs/
@@ -217,6 +223,29 @@ Examples:
     ui_parser.add_argument("--output-dir", type=str, default="output/ui_specs")
     ui_parser.add_argument("--force-design", action="store_true")
 
+    # ─── KANBAN TASK ───
+    kanban_parser = subparsers.add_parser(
+        "kanban-task",
+        help="Generate agent-friendly Kanban tasks from all project documentation",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    python run.py kanban-task
+    python run.py kanban-task --refine-steps 3 --dry-run
+    python run.py kanban-task --input-dir output --output-dir output/kanban_tasks
+        """
+    )
+    kanban_parser.add_argument("--input-dir", type=str, default="output",
+                               help="Root directory to scan for .md context files")
+    kanban_parser.add_argument("--output-dir", type=str, default="output/kanban_tasks",
+                               help="Output directory for generated tasks")
+    kanban_parser.add_argument("--refine-steps", type=int, default=2,
+                               help="Number of refinement iterations (default: 2)")
+    kanban_parser.add_argument("--dry-run", action="store_true",
+                               help="Show the plan without writing files")
+    kanban_parser.add_argument("--force", action="store_true",
+                               help="Overwrite existing kanban_tasks directory")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -357,6 +386,19 @@ Examples:
         if args.force_design:
             sys.argv.append("--force-design")
         ui_main()
+
+    # ─── KANBAN TASK ───
+    elif args.command == "kanban-task":
+        from pipeline.kanban_task import main as kanban_main  # type: ignore
+        sys.argv = ["kanban-task",
+                    "--input-dir", args.input_dir,
+                    "--output-dir", args.output_dir,
+                    "--refine-steps", str(args.refine_steps)]
+        if args.dry_run:
+            sys.argv.append("--dry-run")
+        if args.force:
+            sys.argv.append("--force")
+        kanban_main()
 
 
 if __name__ == "__main__":

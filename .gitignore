@@ -35,6 +35,9 @@ output/critic_feedback.json
 output/completeness_report.json
 output/loop_checkpoints/
 output/ui_specs/
+output/backend/
+output/ci_cd/
+output/kanban_tasks/
 # Legacy generated files (from old runs)
 project_context.md
 spec.md

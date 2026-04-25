@@ -144,6 +144,7 @@ Be thorough. Look for:
 5. UX problems (confusing states, missing feedback)
 6. Edge cases the fuzzer might have missed
 7. **MISSING FLOWS**: Compare the project context with the current state machine. Are there any features or flows described in the context that are completely absent from the state machine? (e.g., if the app has login but no auth flow exists, if it has search but no search states)
+8. **COMPOUND STATES**: Verify that each main screen (dashboard, catalog, offers, profile, settings, etc.) is a compound state with loading/ready/error sub-states. If a screen is a flat/empty state without local micro-states, flag it as a critical UX issue. Each screen should support local loading (skeleton/shimmer), local error (inline error card with retry), and local refresh without affecting the entire app.
 """
     
     try:

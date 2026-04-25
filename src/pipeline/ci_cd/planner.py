@@ -13,7 +13,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from llm.client import call_llm
+from llm.client import call_llm_text
 
 
 def generate_ci_cd_spec(spec_file: str, backend_spec_file: str, output_file: str) -> dict:
@@ -204,7 +204,7 @@ Respond ONLY with valid Markdown (no code blocks, no extra text):
     print(f"     Frontend spec: {len(spec)} chars")
     print(f"     Backend spec: {len(backend_spec)} chars")
     
-    response = call_llm(prompt, system_message="You are a Senior DevOps Architect. Generate ONLY valid Markdown. No code blocks, no extra text. Start with '# CI/CD Functional Specification'.")
+    response = call_llm_text(prompt, system_message="You are a Senior DevOps Architect. Generate ONLY valid Markdown. No code blocks, no extra text. Start with '# CI/CD Functional Specification'.")
     
     # Write output
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
