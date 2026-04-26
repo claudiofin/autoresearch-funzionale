@@ -101,6 +101,18 @@ __all__ = [
 ]
 
 
+def get_machine_type(machine: dict) -> str:
+    """Get the type of a state machine.
+    
+    Args:
+        machine: State machine dict
+    
+    Returns:
+        Machine type string ('parallel', 'hierarchical', 'flat', etc.)
+    """
+    return machine.get("type", "flat")
+
+
 def generate_base_machine(use_parallel: bool = True, state_names: dict = None, branch_names: dict = None) -> dict:
     """Generate an empty base state machine with proper parallel structure.
     
@@ -354,29 +366,69 @@ def compile_machine(machine: dict, max_iterations: int = 1) -> dict:
     # FIX: Single iteration to prevent fractal nesting of auto-generated states
     # Each iteration re-processes states created in previous iteration, causing exponential growth
     max_iterations = 1
+    
+    # DEBUG: Track state count through compilation
+    def _count_states(m):
+        return len(m.get("states", {}))
+    
     for iteration in range(max_iterations):
         try:
             before = json.dumps(machine, sort_keys=True, default=str)
         except (TypeError, ValueError):
             before = str(id(machine))
         
+        print(f"  🔍 [DEBUG] compile_machine: starting with {_count_states(machine)} states")
+        
         machine = apply_branch_placement(machine)
+        print(f"  🔍 [DEBUG] after apply_branch_placement: {_count_states(machine)} states")
+        
         machine = normalize_machine(machine)
+        print(f"  🔍 [DEBUG] after normalize_machine: {_count_states(machine)} states")
+        
         machine = apply_universal_normalization(machine)  # LAW OF ORTHOGRAPHY: universal name corrector
+        print(f"  🔍 [DEBUG] after apply_universal_normalization: {_count_states(machine)} states")
+        
         machine = auto_inject_sub_states(machine)
+        print(f"  🔍 [DEBUG] after auto_inject_sub_states: {_count_states(machine)} states")
+        
         machine = apply_specificity_dedup(machine)
+        print(f"  🔍 [DEBUG] after apply_specificity_dedup: {_count_states(machine)} states")
+        
         machine = apply_error_injection(machine)
+        print(f"  🔍 [DEBUG] after apply_error_injection: {_count_states(machine)} states")
+        
         machine = apply_global_exit(machine)
+        print(f"  🔍 [DEBUG] after apply_global_exit: {_count_states(machine)} states")
+        
         machine = apply_id_injection(machine)  # CRITICAL: '#' references need explicit IDs
+        print(f"  🔍 [DEBUG] after apply_id_injection: {_count_states(machine)} states")
+        
         machine = apply_dead_end_pruning(machine)  # Add CANCEL to dead-end states
+        print(f"  🔍 [DEBUG] after apply_dead_end_pruning: {_count_states(machine)} states")
+        
         machine = apply_dead_state_cleanup(machine)
+        print(f"  🔍 [DEBUG] after apply_dead_state_cleanup: {_count_states(machine)} states")
+        
         machine = apply_target_resolution(machine)
+        print(f"  🔍 [DEBUG] after apply_target_resolution: {_count_states(machine)} states")
+        
         machine = apply_context_awareness(machine)
+        print(f"  🔍 [DEBUG] after apply_context_awareness: {_count_states(machine)} states")
+        
         machine = apply_target_crosscheck(machine)  # SAFETY NET: re-route ghost arrows
+        print(f"  🔍 [DEBUG] after apply_target_crosscheck: {_count_states(machine)} states")
+        
         machine = apply_placeholder_flattening(machine)  # LAMA AFFILATA: collapse wrappers
+        print(f"  🔍 [DEBUG] after apply_placeholder_flattening: {_count_states(machine)} states")
+        
         machine = apply_initial_enforcer(machine)  # FINAL: every compound state has valid initial
+        print(f"  🔍 [DEBUG] after apply_initial_enforcer: {_count_states(machine)} states")
+        
         machine = apply_phantom_state_cleanup(machine)  # Remove phantom states (#, empty, duplicates) — MUST BE LAST
+        print(f"  🔍 [DEBUG] after apply_phantom_state_cleanup: {_count_states(machine)} states")
+        
         machine = apply_workflow_dedup(machine)  # Remove duplicate workflow states at root level
+        print(f"  🔍 [DEBUG] after apply_workflow_dedup: {_count_states(machine)} states")
         
         try:
             after = json.dumps(machine, sort_keys=True, default=str)

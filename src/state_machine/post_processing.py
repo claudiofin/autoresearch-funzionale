@@ -348,6 +348,229 @@ def create_missing_target_states(machine: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Post-Processing: Fix Broken Transitions (point to non-existent states)
+# ---------------------------------------------------------------------------
+
+def fix_broken_transitions(machine: dict) -> dict:
+    """Fix transitions that point to non-existent states.
+    
+    The LLM frequently generates invalid transition targets:
+    - 'navigation' (should be a sub-state like 'navigation.dashboard')
+    - '#navigation.app_idle' (XState selector syntax, invalid in JSON)
+    - 'navigation.session_expired' (when session_expired is a sibling, not child)
+    - '.none.error' (relative path to non-existent state)
+    
+    This function redirects broken transitions to valid fallback states:
+    - CANCEL → app_idle (or nearest valid parent)
+    - RETRY → loading (or nearest valid parent)
+    - START_APP → authenticating
+    - Other events → app_idle
+    
+    Supports both flat and parallel architectures.
+    
+    Args:
+        machine: The state machine dict to fix.
+    
+    Returns:
+        Fixed machine dict.
+    """
+    # For parallel architecture, work with navigation branch states
+    if machine.get("type") == "parallel" and "navigation" in machine.get("states", {}):
+        states_root = machine["states"]["navigation"].get("states", {})
+    else:
+        states_root = machine.get("states", {})
+    
+    # Collect all valid state paths (flat list of all state names at all levels)
+    valid_states = set()
+    
+    def collect_states(states_dict, prefix=""):
+        for name in states_dict:
+            full_path = f"{prefix}.{name}" if prefix else name
+            valid_states.add(name)  # Short name is always valid
+            valid_states.add(full_path)  # Full path is also valid
+            if "states" in states_dict[name]:
+                collect_states(states_dict[name]["states"], full_path)
+    
+    collect_states(states_root)
+    
+    # Also add known valid targets for parallel architecture
+    if machine.get("type") == "parallel":
+        # Top-level machine states (outside navigation)
+        for name in machine.get("states", {}):
+            if name != "navigation":
+                valid_states.add(name)
+    
+    fixed_count = 0
+    
+    def fix_target(target, source_state, event_name):
+        """Fix a single transition target. Returns (fixed_target, was_fixed)."""
+        if not target:
+            return target, False
+        
+        original = target
+        target_str = str(target)
+        
+        # Remove XState selector prefix '#'
+        if target_str.startswith("#"):
+            target_str = target_str[1:]
+        
+        # Remove leading dot (relative path)
+        if target_str.startswith("."):
+            target_str = target_str[1:]
+        
+        # Check if target exists
+        if target_str in valid_states:
+            return target_str, False
+        
+        # Target doesn't exist - determine fallback based on event name
+        event_upper = event_name.upper() if event_name else ""
+        
+        if "CANCEL" in event_upper or "GO_BACK" in event_upper:
+            fallback = "app_idle"
+        elif "RETRY" in event_upper or "REFRESH" in event_upper:
+            fallback = "loading"
+        elif "START_APP" in event_upper:
+            fallback = "authenticating"
+        elif "REAUTHENTICATE" in event_upper:
+            fallback = "authenticating"
+        elif "TIMEOUT" in event_upper:
+            fallback = "error"
+        elif "ON_ERROR" in event_upper or "LOAD_FAILED" in event_upper:
+            fallback = "error"
+        elif "DATA_LOADED" in event_upper or "ON_SUCCESS" in event_upper:
+            fallback = "ready"
+        else:
+            # Generic fallback: try to find a valid state with similar name
+            # or default to app_idle
+            fallback = "app_idle"
+        
+        # Check if fallback exists in valid states
+        if fallback not in valid_states:
+            # If fallback doesn't exist, use the first valid state as last resort
+            fallback = "app_idle" if "app_idle" in valid_states else (list(valid_states)[0] if valid_states else "app_idle")
+        
+        print(f"  🔧 Fixed broken transition: {source_state} --{event_name}-> '{original}' → '{fallback}'")
+        return fallback, True
+    
+    def walk_and_fix(states_dict, depth=0):
+        nonlocal fixed_count
+        if depth > 10:
+            return
+        
+        for state_name, state_config in list(states_dict.items()):
+            on_events = state_config.get("on", {})
+            
+            for event_name, target in list(on_events.items()):
+                if isinstance(target, str):
+                    fixed, was_fixed = fix_target(target, state_name, event_name)
+                    if was_fixed:
+                        on_events[event_name] = fixed
+                        fixed_count += 1
+                elif isinstance(target, dict):
+                    t_target = target.get("target", "")
+                    if t_target:
+                        fixed, was_fixed = fix_target(t_target, state_name, event_name)
+                        if was_fixed:
+                            target["target"] = fixed
+                            fixed_count += 1
+                elif isinstance(target, list):
+                    for i, t in enumerate(target):
+                        if isinstance(t, dict):
+                            t_target = t.get("target", "")
+                            if t_target:
+                                fixed, was_fixed = fix_target(t_target, state_name, event_name)
+                                if was_fixed:
+                                    target[i]["target"] = fixed
+                                    fixed_count += 1
+                        elif isinstance(t, str):
+                            fixed, was_fixed = fix_target(t, state_name, event_name)
+                            if was_fixed:
+                                target[i] = fixed
+                                fixed_count += 1
+            
+            # Recurse into sub-states
+            if "states" in state_config:
+                walk_and_fix(state_config["states"], depth + 1)
+    
+    walk_and_fix(states_root)
+    
+    if fixed_count > 0:
+        print(f"  ✅ Fixed {fixed_count} broken transitions")
+    
+    return machine
+
+
+# ---------------------------------------------------------------------------
+# Post-Processing: Remove Duplicate States (same name at different paths)
+# ---------------------------------------------------------------------------
+
+def remove_duplicate_states(machine: dict) -> dict:
+    """Remove duplicate states that appear at different paths.
+    
+    The LLM sometimes creates the same state name at different paths:
+    - 'authenticating' at navigation.auth_guard.auth_guard_invalid.authenticating
+    - 'authenticating' at navigation.session_expired.session_expired_reauth.authenticating
+    
+    This function keeps only the first occurrence and removes duplicates.
+    
+    Args:
+        machine: The state machine dict to fix.
+    
+    Returns:
+        Fixed machine dict.
+    """
+    # For parallel architecture, work with navigation branch states
+    if machine.get("type") == "parallel" and "navigation" in machine.get("states", {}):
+        states_root = machine["states"]["navigation"].get("states", {})
+    else:
+        states_root = machine.get("states", {})
+    
+    # Track all state names and their paths
+    seen_states = {}  # name -> first path
+    duplicates_to_remove = []  # (path, name) pairs to remove
+    
+    def find_duplicates(states_dict, prefix=""):
+        for name in states_dict:
+            full_path = f"{prefix}.{name}" if prefix else name
+            
+            if name in seen_states:
+                # This is a duplicate - mark for removal
+                duplicates_to_remove.append((full_path, name))
+                print(f"  🧹 Found duplicate state: '{name}' at {full_path} (first at {seen_states[name]})")
+            else:
+                seen_states[name] = full_path
+            
+            # Recurse into sub-states
+            if "states" in states_dict[name]:
+                find_duplicates(states_dict[name]["states"], full_path)
+    
+    find_duplicates(states_root)
+    
+    # Remove duplicates (need to navigate to parent and delete)
+    for path, name in duplicates_to_remove:
+        parts = path.split(".")
+        if len(parts) == 1:
+            # Top-level duplicate - remove directly
+            if name in states_root:
+                del states_root[name]
+        else:
+            # Nested duplicate - navigate to parent
+            parent = states_root
+            for part in parts[:-1]:
+                if part in parent and "states" in parent[part]:
+                    parent = parent[part]["states"]
+                else:
+                    break
+            if name in parent:
+                del parent[name]
+    
+    if duplicates_to_remove:
+        print(f"  ✅ Removed {len(duplicates_to_remove)} duplicate states")
+    
+    return machine
+
+
+# ---------------------------------------------------------------------------
 # Post-Processing: Validate No Critical Patterns (Rules 15, 16, 17)
 # ---------------------------------------------------------------------------
 

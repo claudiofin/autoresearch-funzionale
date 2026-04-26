@@ -54,7 +54,10 @@ def _call_llm(client, model: str, system_message: str, prompt: str,
 
 
 def _extract_json(content: str) -> dict:
-    """Extract JSON from LLM response, handling markdown fences and extra text."""
+    """Extract JSON from LLM response, handling markdown fences and extra text.
+    
+    IMPROVED: Handles truncated JSON, unterminated strings, and common LLM errors.
+    """
     # Strip markdown fences
     if content.startswith("```json"):
         content = content[7:]
@@ -78,6 +81,7 @@ def _extract_json(content: str) -> dict:
     bracket_stack = []
     in_string = False
     escape_next = False
+    last_valid_end = start - 1
     
     for i in range(start, len(content)):
         c = content[i]
@@ -112,10 +116,49 @@ def _extract_json(content: str) -> dict:
                 # Balanced! Extract from start to here
                 json_str = content[start:i+1]
                 return json.loads(json_str)
+            last_valid_end = i
     
-    # If we get here, try to parse what we have (might be truncated)
+    # If we get here, the JSON is truncated or malformed
+    # Try to fix common issues:
     json_str = content[start:]
-    return json.loads(json_str)
+    
+    # FIX 1: Close unclosed strings
+    if in_string:
+        json_str = json_str.rstrip()
+        if not json_str.endswith('"'):
+            # Find the last unescaped quote and close from there
+            json_str = json_str + '"'
+    
+    # FIX 2: Close unclosed brackets
+    for bracket in reversed(bracket_stack):
+        if bracket == '{':
+            json_str = json_str.rstrip().rstrip(',').rstrip() + '}'
+        elif bracket == '[':
+            json_str = json_str.rstrip().rstrip(',').rstrip() + ']'
+    
+    # FIX 3: Remove trailing commas before closing brackets
+    import re
+    json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
+    
+    # FIX 4: Try to parse
+    try:
+        return json.loads(json_str)
+    except json.JSONDecodeError:
+        # FIX 5: Last resort - try to find a valid sub-JSON
+        # Look for complete objects/arrays within the truncated content
+        for end_pos in range(len(json_str), start, -1):
+            test_str = json_str[:end_pos]
+            # Close any open brackets
+            open_braces = test_str.count('{') - test_str.count('}')
+            open_brackets = test_str.count('[') - test_str.count(']')
+            test_str = test_str.rstrip().rstrip(',') + '}' * open_braces + ']' * open_brackets
+            try:
+                return json.loads(test_str)
+            except json.JSONDecodeError:
+                continue
+        
+        # If all else fails, raise the original error
+        raise json.JSONDecodeError("Could not extract valid JSON from LLM response", json_str, 0)
 
 
 def _get_client():

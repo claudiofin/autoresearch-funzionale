@@ -15,7 +15,11 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from pipeline.frontend.spec.llm_client import call_llm_states, call_llm_transitions, call_llm_workflows
 from state_machine.builder import generate_base_machine, build_state_config, add_transitions, add_transitions_to_branch, normalize_machine, add_workflows_to_machine, compile_machine
-from state_machine.post_processing import remove_toplevel_duplicates, complete_missing_branches, clean_unreachable_states, validate_no_critical_patterns, create_missing_target_states
+from state_machine.post_processing import (
+    remove_toplevel_duplicates, complete_missing_branches, clean_unreachable_states,
+    validate_no_critical_patterns, create_missing_target_states,
+    fix_broken_transitions, remove_duplicate_states
+)
 from diagrams.plantuml import generate_plantuml_statechart, generate_plantuml_sequence
 from diagrams.markdown import generate_spec_markdown, _make_serializable
 
@@ -196,8 +200,30 @@ def run_analysis(
             # Add transitions
             add_transitions(machine, transitions)
     
+    # DEBUG: Print machine state before compile
+    print(f"  🔍 [DEBUG] Before compile_machine: {len(machine.get('states', {}))} root states")
+    for branch_name, branch_config in machine.get("states", {}).items():
+        if isinstance(branch_config, dict):
+            sub_states = branch_config.get("states", {})
+            print(f"  🔍 [DEBUG]   {branch_name}: {len(sub_states)} sub-states: {list(sub_states.keys())[:10]}")
+    
     # Apply Pattern Compiler (Normalization, Auto-injection, Dedup, Error Injection, Global Exit, Dead State Cleanup, Target Resolution, Context Awareness)
     machine = compile_machine(machine)
+    
+    # DEBUG: Print machine state after compile
+    print(f"  🔍 [DEBUG] After compile_machine: {len(machine.get('states', {}))} root states")
+    for branch_name, branch_config in machine.get("states", {}).items():
+        if isinstance(branch_config, dict):
+            sub_states = branch_config.get("states", {})
+            print(f"  🔍 [DEBUG]   {branch_name}: {len(sub_states)} sub-states: {list(sub_states.keys())[:10]}")
+    
+    # Post-processing: Fix broken transitions (point to non-existent states)
+    print("\n  🔧 Post-processing: Fixing broken transitions...")
+    machine = fix_broken_transitions(machine)
+    
+    # Post-processing: Remove duplicate states (same name at different paths)
+    print("\n  🧹 Post-processing: Removing duplicate states...")
+    machine = remove_duplicate_states(machine)
     
     # Post-processing: validate against critical rules
     violations = validate_no_critical_patterns(machine)

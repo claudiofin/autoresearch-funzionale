@@ -8,6 +8,8 @@ from state_machine.post_processing import (
     clean_unreachable_states,
     create_missing_target_states,
     validate_no_critical_patterns,
+    fix_broken_transitions,
+    remove_duplicate_states,
 )
 
 
@@ -353,3 +355,255 @@ class TestValidateNoCriticalPatterns:
         }
         violations = validate_no_critical_patterns(machine)
         assert any("REGOLA 16" in v for v in violations)
+
+
+class TestFixBrokenTransitions:
+    """Test fix_broken_transitions - redirects transitions to non-existent states."""
+
+    def test_fixes_xstate_selector_syntax(self):
+        """'#navigation.app_idle' should be fixed to 'app_idle'."""
+        machine = {
+            "type": "parallel",
+            "states": {
+                "navigation": {
+                    "initial": "app_idle",
+                    "states": {
+                        "app_idle": {"on": {}},
+                        "loading": {"on": {"CANCEL": "#navigation.app_idle"}},
+                    },
+                },
+                "active_workflows": {"initial": "none", "states": {"none": {}}},
+            },
+        }
+        result = fix_broken_transitions(machine)
+        nav = result["states"]["navigation"]["states"]
+        # CANCEL should be redirected to app_idle
+        assert nav["loading"]["on"]["CANCEL"] == "app_idle"
+
+    def test_fixes_relative_path_to_nonexistent(self):
+        """'.none.error' should be fixed based on event type."""
+        machine = {
+            "type": "parallel",
+            "states": {
+                "navigation": {
+                    "initial": "app_idle",
+                    "states": {
+                        "app_idle": {"on": {}},
+                        "loading": {"on": {"RETRY": ".none.error"}},
+                    },
+                },
+                "active_workflows": {"initial": "none", "states": {"none": {}}},
+            },
+        }
+        result = fix_broken_transitions(machine)
+        nav = result["states"]["navigation"]["states"]
+        # RETRY should be redirected to loading
+        assert nav["loading"]["on"]["RETRY"] == "loading"
+
+    def test_fixes_bare_navigation_reference(self):
+        """'navigation' (bare) should be fixed based on event type."""
+        machine = {
+            "type": "parallel",
+            "states": {
+                "navigation": {
+                    "initial": "app_idle",
+                    "states": {
+                        "app_idle": {"on": {}},
+                        "authenticating": {"on": {}},  # must exist for fallback
+                        "ready": {"on": {"START_APP": "navigation"}},
+                    },
+                },
+                "active_workflows": {"initial": "none", "states": {"none": {}}},
+            },
+        }
+        result = fix_broken_transitions(machine)
+        nav = result["states"]["navigation"]["states"]
+        # START_APP should be redirected to authenticating (since it exists)
+        assert nav["ready"]["on"]["START_APP"] == "authenticating"
+
+    def test_preserves_valid_transitions(self):
+        """Valid transitions should not be modified."""
+        machine = {
+            "type": "parallel",
+            "states": {
+                "navigation": {
+                    "initial": "app_idle",
+                    "states": {
+                        "app_idle": {"on": {"START": "loading"}},
+                        "loading": {"on": {"DATA_LOADED": "ready"}},
+                        "ready": {"on": {}},
+                    },
+                },
+                "active_workflows": {"initial": "none", "states": {"none": {}}},
+            },
+        }
+        result = fix_broken_transitions(machine)
+        nav = result["states"]["navigation"]["states"]
+        assert nav["app_idle"]["on"]["START"] == "loading"
+        assert nav["loading"]["on"]["DATA_LOADED"] == "ready"
+
+    def test_handles_dict_target(self):
+        """Dict-style targets should also be fixed."""
+        machine = {
+            "type": "parallel",
+            "states": {
+                "navigation": {
+                    "initial": "app_idle",
+                    "states": {
+                        "app_idle": {"on": {}},
+                        "loading": {"on": {"CANCEL": {"target": "#navigation.app_idle"}}},
+                    },
+                },
+                "active_workflows": {"initial": "none", "states": {"none": {}}},
+            },
+        }
+        result = fix_broken_transitions(machine)
+        nav = result["states"]["navigation"]["states"]
+        assert nav["loading"]["on"]["CANCEL"]["target"] == "app_idle"
+
+    def test_handles_list_targets(self):
+        """List-style targets should also be fixed."""
+        machine = {
+            "type": "parallel",
+            "states": {
+                "navigation": {
+                    "initial": "app_idle",
+                    "states": {
+                        "app_idle": {"on": {}},
+                        "loading": {"on": {"CANCEL": [{"target": "#navigation.app_idle"}]}},
+                    },
+                },
+                "active_workflows": {"initial": "none", "states": {"none": {}}},
+            },
+        }
+        result = fix_broken_transitions(machine)
+        nav = result["states"]["navigation"]["states"]
+        assert nav["loading"]["on"]["CANCEL"][0]["target"] == "app_idle"
+
+    def test_flat_architecture(self):
+        """Should work with flat (non-parallel) architecture too."""
+        machine = {
+            "initial": "app_idle",
+            "states": {
+                "app_idle": {"on": {}},
+                "loading": {"on": {"CANCEL": "#navigation.app_idle"}},
+            },
+        }
+        result = fix_broken_transitions(machine)
+        assert result["states"]["loading"]["on"]["CANCEL"] == "app_idle"
+
+
+class TestRemoveDuplicateStates:
+    """Test remove_duplicate_states - removes states with same name at different paths."""
+
+    def test_removes_nested_duplicate(self):
+        """Duplicate 'authenticating' at different paths should be removed."""
+        machine = {
+            "type": "parallel",
+            "states": {
+                "navigation": {
+                    "initial": "app_idle",
+                    "states": {
+                        "app_idle": {"on": {}},
+                        "auth_guard": {
+                            "states": {
+                                "auth_guard_invalid": {
+                                    "states": {
+                                        "authenticating": {"on": {}},  # first occurrence
+                                    },
+                                },
+                            },
+                        },
+                        "session_expired": {
+                            "states": {
+                                "session_expired_reauth": {
+                                    "states": {
+                                        "authenticating": {"on": {}},  # duplicate
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+                "active_workflows": {"initial": "none", "states": {"none": {}}},
+            },
+        }
+        result = remove_duplicate_states(machine)
+        nav = result["states"]["navigation"]["states"]
+        # First occurrence should be kept
+        assert "authenticating" in nav["auth_guard"]["states"]["auth_guard_invalid"]["states"]
+        # Duplicate should be removed
+        assert "authenticating" not in nav["session_expired"]["states"]["session_expired_reauth"]["states"]
+
+    def test_removes_top_level_duplicate(self):
+        """Duplicate at top level should be removed."""
+        machine = {
+            "type": "parallel",
+            "states": {
+                "navigation": {
+                    "initial": "app_idle",
+                    "states": {
+                        "app_idle": {"on": {}},
+                        "creating": {"on": {}},  # first occurrence
+                        "login": {
+                            "states": {
+                                "login_success": {
+                                    "states": {
+                                        "creating": {"on": {}},  # duplicate
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+                "active_workflows": {"initial": "none", "states": {"none": {}}},
+            },
+        }
+        result = remove_duplicate_states(machine)
+        nav = result["states"]["navigation"]["states"]
+        # First occurrence (top-level) should be kept
+        assert "creating" in nav
+        # Duplicate should be removed
+        assert "creating" not in nav["login"]["states"]["login_success"]["states"]
+
+    def test_no_duplicates(self):
+        """Machine without duplicates should be unchanged."""
+        machine = {
+            "type": "parallel",
+            "states": {
+                "navigation": {
+                    "initial": "app_idle",
+                    "states": {
+                        "app_idle": {"on": {}},
+                        "loading": {"on": {}},
+                        "ready": {"on": {}},
+                    },
+                },
+                "active_workflows": {"initial": "none", "states": {"none": {}}},
+            },
+        }
+        result = remove_duplicate_states(machine)
+        nav = result["states"]["navigation"]["states"]
+        assert "app_idle" in nav
+        assert "loading" in nav
+        assert "ready" in nav
+
+    def test_flat_architecture(self):
+        """Should work with flat (non-parallel) architecture too."""
+        machine = {
+            "initial": "app_idle",
+            "states": {
+                "app_idle": {"on": {}},
+                "loading": {"on": {}},
+                "success": {
+                    "states": {
+                        "loading": {"on": {}},  # duplicate
+                    },
+                },
+            },
+        }
+        result = remove_duplicate_states(machine)
+        # First occurrence (top-level) should be kept
+        assert "loading" in result["states"]
+        # Duplicate should be removed
+        assert "loading" not in result["states"]["success"]["states"]

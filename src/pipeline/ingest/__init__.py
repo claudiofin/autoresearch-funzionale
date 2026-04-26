@@ -44,38 +44,71 @@ def main():
     args = parser.parse_args()
     
     input_path = Path(args.input_dir)
+    
+    # FIX: Support both directories and single files
+    is_single_file = input_path.is_file()
+    
     if not input_path.exists():
         print(f"Creating input directory: {args.input_dir}")
         input_path.mkdir(parents=True, exist_ok=True)
         print("Please add your input files (text, HTML, screenshots) to this directory and re-run.")
         return
     
-    print(f"Processing inputs from: {args.input_dir}")
+    if is_single_file:
+        print(f"Processing single file: {args.input_dir}")
+    else:
+        print(f"Processing inputs from: {args.input_dir}")
     print()
     
     # Process all inputs
     print("Step 1: Reading text files...")
-    texts = read_text_files(args.input_dir)
+    if is_single_file:
+        # Read single file directly
+        texts = []
+        try:
+            with open(args.input_dir, "r", encoding="utf-8") as f:
+                content = f.read()
+            texts.append({
+                "filename": input_path.name,
+                "content": content,
+                "type": "text"
+            })
+        except Exception as e:
+            print(f"  ⚠️  Error reading {args.input_dir}: {e}")
+    else:
+        texts = read_text_files(args.input_dir)
     print(f"  Found {len(texts)} text file(s)")
     print()
     
     print("Step 2: Reading PDF files...")
-    pdf_texts = read_pdf_files(args.input_dir)
+    if is_single_file:
+        pdf_texts = []
+    else:
+        pdf_texts = read_pdf_files(args.input_dir)
     print(f"  Found {len(pdf_texts)} PDF file(s)")
     print()
     
     print("Step 3: Reading DOCX files...")
-    docx_texts = read_docx_files(args.input_dir)
+    if is_single_file:
+        docx_texts = []
+    else:
+        docx_texts = read_docx_files(args.input_dir)
     print(f"  Found {len(docx_texts)} DOCX file(s)")
     print()
     
     print("Step 4: Processing HTML files...")
-    html_structures = process_html_files(args.input_dir)
+    if is_single_file:
+        html_structures = []
+    else:
+        html_structures = process_html_files(args.input_dir)
     print(f"  Found {len(html_structures)} HTML file(s)")
     print()
     
     print("Step 5: Processing screenshots (with Vision analysis)...")
-    screenshots = process_screenshots(args.input_dir, use_vision=True)
+    if is_single_file:
+        screenshots = []
+    else:
+        screenshots = process_screenshots(args.input_dir, use_vision=True)
     print(f"  Found {len(screenshots)} screenshot(s)")
     print()
     

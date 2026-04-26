@@ -98,15 +98,39 @@ def apply_dead_state_cleanup(machine: dict) -> dict:
     - Connected (if they have entry actions — likely important)
     - Removed (if they're truly dead)
     
+    FIX: Do NOT remove states that are direct children of parallel branches.
+    Parallel branches (like 'navigation', 'active_workflows') may not have
+    an initial state set, making all their children appear unreachable via BFS.
+    These states are "structurally reachable" and should be preserved.
+    
     Args:
         machine: The state machine dict
     
     Returns:
         Machine with dead states cleaned up
     """
+    from state_machine.builder import get_machine_type
+    
     reachable = bfs_reachable(machine)
     states = machine.get("states", {})
     limit = DEPTH_LIMITS["cleanup"]
+    machine_type = get_machine_type(machine)
+    
+    # Collect all state names that exist under parallel branches
+    # These should NOT be removed even if unreachable via BFS
+    structurally_reachable = set()
+    if machine_type == "parallel":
+        for branch_name, branch_config in states.items():
+            if isinstance(branch_config, dict):
+                branch_states = branch_config.get("states", {})
+                for sub_name in branch_states:
+                    structurally_reachable.add(sub_name)
+                    # Also add nested states
+                    sub_config = branch_states[sub_name]
+                    if isinstance(sub_config, dict):
+                        nested = sub_config.get("states", {})
+                        for nested_name in nested:
+                            structurally_reachable.add(f"{sub_name}.{nested_name}")
     
     def _cleanup(states_dict: dict, prefix: str = "", depth: int = 0) -> None:
         if depth > limit:
@@ -118,6 +142,13 @@ def apply_dead_state_cleanup(machine: dict) -> dict:
             if not isinstance(config, dict):
                 continue
             full_path = f"{prefix}.{name}" if prefix else name
+            
+            # FIX: Skip removal for structurally reachable states in parallel machines
+            if machine_type == "parallel" and name in structurally_reachable:
+                # Don't remove, but still recurse into sub-states
+                if "states" in config:
+                    _cleanup(config["states"], full_path, depth + 1)
+                continue
             
             if full_path not in reachable and name not in ("error_handler",):
                 entry_actions = config.get("entry", [])
