@@ -175,6 +175,9 @@ def apply_phantom_state_cleanup(machine: dict) -> dict:
       (e.g., 'completed' at root when 'navigation.purchase_group_workflow.completed' exists)
     - States that are sub-state names (loading, ready, error, error_handler) at root level
     
+    FIX: Branch states (navigation, active_workflows) that have 'states' sub-dict
+    are NOT phantoms — they are structural branches and must be preserved.
+    
     Args:
         machine: The state machine dict
     
@@ -216,13 +219,20 @@ def apply_phantom_state_cleanup(machine: dict) -> dict:
             to_remove.append(name)
             continue
         
+        # FIX: Branch states (navigation, active_workflows) that have 'states' sub-dict
+        # are structural branches, NOT phantoms. Preserve them.
+        if isinstance(config, dict) and "states" in config:
+            # This is a branch with sub-states — not a phantom
+            continue
+        
         # Remove states that are duplicates of branch states
-        # Only remove if the state has no entry/exit/on (pure phantom)
+        # Only remove if the state has no entry/exit/on/states (pure phantom)
         if name in branch_state_names:
             entry = config.get("entry", [])
             exit_actions = config.get("exit", [])
             on = config.get("on", {})
-            has_content = bool(entry) or bool(exit_actions) or bool(on)
+            has_sub_states = "states" in config and bool(config["states"])
+            has_content = bool(entry) or bool(exit_actions) or bool(on) or has_sub_states
             if not has_content:
                 to_remove.append(name)
     
