@@ -7,6 +7,30 @@ import json
 from datetime import datetime
 
 
+def _make_serializable(obj):
+    """Recursively convert non-serializable objects to serializable equivalents.
+    
+    Handles:
+    - Functions/lambdas: converted to their __name__ or "<lambda>"
+    - Sets/tuples: converted to lists
+    - Other non-serializable types: converted to string representation
+    """
+    if isinstance(obj, dict):
+        return {k: _make_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [_make_serializable(item) for item in obj]
+    elif isinstance(obj, set):
+        return [_make_serializable(item) for item in obj]
+    elif callable(obj):
+        # Functions/lambdas -> their name or "<lambda>"
+        return getattr(obj, '__name__', '<lambda>')
+    elif isinstance(obj, (str, int, float, bool, type(None))):
+        return obj
+    else:
+        # Fallback: convert to string
+        return str(obj)
+
+
 def generate_spec_markdown(
     machine: dict,
     llm_data: dict,
@@ -80,8 +104,23 @@ def generate_spec_markdown(
             violations_md += f"- ❌ {v}\n"
     
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    states_count = len(machine['states'])
-    transitions_count = sum(len(s.get('on', {})) for s in machine['states'].values())
+    
+    # Count ALL states recursively (not just top-level branches)
+    def _count_all_states(states_dict: dict) -> tuple:
+        """Count all states and transitions recursively."""
+        total_states = 0
+        total_transitions = 0
+        for name, config in states_dict.items():
+            total_states += 1
+            total_transitions += len(config.get('on', {}))
+            sub_states = config.get('states', {})
+            if sub_states:
+                sub_s, sub_t = _count_all_states(sub_states)
+                total_states += sub_s
+                total_transitions += sub_t
+        return total_states, total_transitions
+    
+    states_count, transitions_count = _count_all_states(machine.get('states', {}))
     edge_cases_count = len(edge_cases)
     error_types_count = len(error_handling) if error_handling else 1
     
@@ -120,7 +159,7 @@ Generated: {timestamp}
 ### 3.2 XState Configuration
 
 ```json
-{json.dumps(machine, indent=2)}
+{json.dumps(_make_serializable(machine), indent=2)}
 ```
 
 ---

@@ -22,7 +22,7 @@ import argparse
 from pathlib import Path
 
 from pipeline.frontend.spec.llm_client import call_llm_spec
-from pipeline.frontend.spec.orchestrator import run_analysis
+from pipeline.frontend.spec.orchestrator import run_analysis, run_multi_step_spec
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -49,6 +49,8 @@ def main():
                         help="Existing machine JSON file (for iterative approach)")
     parser.add_argument("--critic-feedback", type=str, default=None,
                         help="Critic feedback JSON file")
+    parser.add_argument("--validator-feedback", type=str, default=None,
+                        help="Validator feedback JSON string (from previous iteration)")
     args = parser.parse_args()
     
     if not os.path.exists(args.context):
@@ -70,20 +72,44 @@ def main():
             critic_feedback = json.load(f)
         print(f"  🚨 Critic feedback loaded: {args.critic_feedback}")
     
+    # Parse validator feedback if provided (JSON string from CLI)
+    validator_feedback = None
+    if args.validator_feedback:
+        try:
+            validator_feedback = json.loads(args.validator_feedback)
+            print(f"  🔍 Validator feedback loaded: score={validator_feedback.get('quality_score', 'N/A')}, "
+                  f"dead_ends={validator_feedback.get('dead_end_count', 0)}, "
+                  f"unreachable={validator_feedback.get('unreachable_count', 0)}")
+        except json.JSONDecodeError as e:
+            print(f"  ⚠️  Failed to parse validator feedback: {e}")
+    
     print(f"Running functional analysis...")
     print(f"  Context: {args.context}")
     print(f"  Output: {args.output}")
     print(f"  Time budget: {args.time_budget}s")
     print()
     
-    metrics = run_analysis(
-        args.context, 
-        args.output, 
-        args.time_budget, 
-        analyst_suggestions=analyst_suggestions,
-        existing_machine_file=args.machine,
-        critic_feedback=critic_feedback
-    )
+    # Use multi-step spec generation if validator feedback is provided (iterative improvement)
+    if validator_feedback and args.machine:
+        print("  🔄 Using multi-step spec generation with validator feedback...")
+        metrics = run_multi_step_spec(
+            args.context,
+            args.output,
+            args.time_budget,
+            analyst_suggestions=analyst_suggestions,
+            existing_machine_file=args.machine,
+            critic_feedback=critic_feedback,
+            validator_feedback=validator_feedback
+        )
+    else:
+        metrics = run_analysis(
+            args.context, 
+            args.output, 
+            args.time_budget, 
+            analyst_suggestions=analyst_suggestions,
+            existing_machine_file=args.machine,
+            critic_feedback=critic_feedback
+        )
     
     print()
     print("=" * 50)

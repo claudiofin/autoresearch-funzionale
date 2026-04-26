@@ -71,40 +71,171 @@ def _extract_targets(target) -> list:
     return []
 
 
+def _get_parallel_initial_states(machine: dict) -> list:
+    """Get initial states for a parallel machine.
+    
+    In parallel mode, each branch has its own 'initial' property that points
+    to the actual starting state within that branch. We need to resolve these
+    to find the real initial states.
+    
+    Example:
+        machine = {
+            "type": "parallel",
+            "states": {
+                "navigation": {"initial": "app_initial", "states": {"app_initial": {...}}},
+                "workflows": {"initial": "none", "states": {"none": {...}}}
+            }
+        }
+        → Returns ["app_initial", "none"]
+    """
+    initial_states = []
+    branches = machine.get("states", {})
+    
+    for branch_name, branch_config in branches.items():
+        if not isinstance(branch_config, dict):
+            continue
+        branch_initial = branch_config.get("initial")
+        if branch_initial:
+            initial_states.append(branch_initial)
+        else:
+            # Fallback: use first state in the branch
+            branch_states = branch_config.get("states", {})
+            if branch_states:
+                initial_states.append(next(iter(branch_states)))
+    
+    return initial_states
+
+
+def _get_initial_sub_states(states: dict, state_name: str) -> list:
+    """Get the initial sub-states of a compound state.
+    
+    If a state has sub-states with an 'initial' property, return the initial
+    sub-state path(s). This allows the fuzzer to enter compound states and
+    find more reachable states.
+    
+    Example:
+        states = {
+            "app_idle": {
+                "initial": "loading",
+                "states": {"loading": {...}, "ready": {...}, "error": {...}}
+            }
+        }
+        _get_initial_sub_states(states, "app_idle") → ["app_idle.loading"]
+    
+    Returns list because some states may have multiple initial sub-states
+    (e.g., in parallel compound states).
+    """
+    if state_name not in states:
+        return []
+    
+    state_config = states[state_name]
+    sub_states = state_config.get("states", {})
+    
+    if not sub_states:
+        return []
+    
+    initial = state_config.get("initial")
+    if initial and initial in sub_states:
+        return [f"{state_name}.{initial}"]
+    
+    # Fallback: return first sub-state
+    first_sub = next(iter(sub_states), None)
+    if first_sub:
+        return [f"{state_name}.{first_sub}"]
+    
+    return []
+
+
+def _resolve_state_path(states: dict, state_name: str) -> dict:
+    """Resolve a state name (possibly with dot notation) to its config.
+    
+    Handles:
+    - Simple: "app_idle" → states["app_idle"]
+    - Dotted: "app_idle.loading" → states["app_idle"]["states"]["loading"]
+    - Deep: "app_initial.checking_auth.validating" → nested states
+    """
+    if "." not in state_name:
+        return _resolve_state(states, state_name)
+    
+    parts = state_name.split(".")
+    current = states
+    for part in parts:
+        if part not in current:
+            return {}
+        current = current[part]
+        # Navigate into sub-states if not the last part
+        if "states" in current and part != parts[-1]:
+            current = current["states"]
+    
+    return current if isinstance(current, dict) else {}
+
+
 def find_reachable_states(machine: dict) -> set:
-    """Find all states reachable from initial state (BFS)."""
+    """Find all states reachable from initial state (BFS).
+    
+    For parallel machines, enters compound states via their initial sub-states
+    to find more reachable states. For example, if app_idle has sub-states
+    {loading, ready, error} with initial=loading, the BFS starts from
+    app_idle.loading and follows its transitions.
+    """
     states = _get_navigation_states(machine)
     
-    # For parallel architecture, get initial from navigation branch
-    if machine.get("type") == "parallel" and "navigation" in machine.get("states", {}):
-        initial = machine["states"]["navigation"].get("initial", "app_idle")
+    # Handle parallel architecture
+    if machine.get("type") == "parallel":
+        # Get actual initial states from each branch's 'initial' property
+        initial_states = _get_parallel_initial_states(machine)
     else:
         initial = machine.get("initial", "")
+        initial_states = [initial] if initial else []
     
-    if not initial or initial not in states:
+    if not initial_states:
         return set()
     
     reachable = set()
-    queue = deque([initial])
-    reachable.add(initial)
+    queue = deque()
+    
+    for s in initial_states:
+        if s in states or _find_in_sub_states(states, s):
+            reachable.add(s)
+            queue.append(s)
+            # FIX: Also enter compound states via their initial sub-states
+            sub_initials = _get_initial_sub_states(states, s)
+            for sub_path in sub_initials:
+                if sub_path not in reachable:
+                    reachable.add(sub_path)
+                    queue.append(sub_path)
     
     while queue:
         current = queue.popleft()
-        if current in states:
-            state_config = states[current]
-            for event, target in state_config.get("on", {}).items():
-                for t in _extract_targets(target):
-                    t_clean = t.lstrip('.')
-                    if t_clean and t_clean not in reachable:
-                        # Check if target exists in states or sub-states
-                        if t_clean in states or _find_in_sub_states(states, t_clean):
-                            reachable.add(t_clean)
-                            queue.append(t_clean)
-            # Also check sub-states
-            for sub_name, sub_config in state_config.get("states", {}).items():
-                if sub_name not in reachable:
-                    reachable.add(sub_name)
-                    queue.append(sub_name)
+        
+        # Resolve state config (handles dotted paths like "app_idle.loading")
+        state_config = _resolve_state_path(states, current)
+        if not state_config:
+            continue
+        
+        # Follow transitions
+        for event, target in state_config.get("on", {}).items():
+            for t in _extract_targets(target):
+                t_clean = t.lstrip('.')
+                if t_clean and t_clean not in reachable:
+                    # Check if target exists
+                    if _resolve_state_path(states, t_clean):
+                        reachable.add(t_clean)
+                        queue.append(t_clean)
+                        # Also enter compound targets via their initial sub-states
+                        sub_initials = _get_initial_sub_states(states, t_clean)
+                        for sub_path in sub_initials:
+                            if sub_path not in reachable:
+                                reachable.add(sub_path)
+                                queue.append(sub_path)
+        
+        # Also check direct sub-states
+        direct_sub_states = state_config.get("states", {})
+        for sub_name in direct_sub_states:
+            sub_path = f"{current}.{sub_name}" if "." in current else sub_name
+            if sub_path not in reachable:
+                reachable.add(sub_path)
+                queue.append(sub_path)
     
     return reachable
 
@@ -137,16 +268,30 @@ def _resolve_state(states: dict, state_name: str) -> dict:
 
 
 def simulate_path(machine: dict, max_steps: int = 50) -> dict:
-    """Simulate a random path through the state machine."""
+    """Simulate a random path through the state machine.
+    
+    For parallel machines, enters compound states via their initial sub-states
+    to simulate more realistic paths through the state machine.
+    """
     states = _get_navigation_states(machine)
     
-    # For parallel architecture, get initial from navigation branch
-    if machine.get("type") == "parallel" and "navigation" in machine.get("states", {}):
-        initial = machine["states"]["navigation"].get("initial", "app_idle")
+    # Handle parallel architecture
+    if machine.get("type") == "parallel":
+        # For simulation, pick a random branch's initial or the branch itself
+        branches = list(machine.get("states", {}).keys())
+        initial_candidates = []
+        for b in branches:
+            b_config = machine["states"][b]
+            b_initial = b_config.get("initial")
+            if b_initial:
+                initial_candidates.append(b_initial)
+            else:
+                initial_candidates.append(b)
+        initial = random.choice(initial_candidates) if initial_candidates else ""
     else:
         initial = machine.get("initial", "")
     
-    if not initial or not _resolve_state(states, initial):
+    if not initial or not _resolve_state_path(states, initial):
         return {"error": "Invalid initial state", "path": []}
     
     path = [initial]
@@ -154,7 +299,7 @@ def simulate_path(machine: dict, max_steps: int = 50) -> dict:
     steps = 0
     
     while steps < max_steps:
-        current_config = _resolve_state(states, current)
+        current_config = _resolve_state_path(states, current)
         if not current_config:
             return {
                 "status": "dead_end",
@@ -166,6 +311,14 @@ def simulate_path(machine: dict, max_steps: int = 50) -> dict:
         transitions = current_config.get("on", {})
         
         if not transitions:
+            # FIX: Try entering compound state via initial sub-state
+            sub_initials = _get_initial_sub_states(states, current)
+            if sub_initials:
+                sub_target = random.choice(sub_initials)
+                path.append(sub_target)
+                current = sub_target
+                steps += 1
+                continue
             return {
                 "status": "dead_end",
                 "path": path,
@@ -186,7 +339,7 @@ def simulate_path(machine: dict, max_steps: int = 50) -> dict:
             }
         
         target_clean = target.lstrip('.')
-        if not _resolve_state(states, target_clean):
+        if not _resolve_state_path(states, target_clean):
             return {
                 "status": "unknown_target",
                 "path": path,
@@ -215,15 +368,25 @@ def simulate_path(machine: dict, max_steps: int = 50) -> dict:
 
 
 def detect_loops(machine: dict) -> list:
-    """Find all loops in the state machine (DFS)."""
+    """Find all loops in the state machine (DFS).
+    
+    For parallel machines, enters compound states via their initial sub-states
+    to detect loops at all levels of the state hierarchy.
+    """
     states = _get_navigation_states(machine)
     loops = []
     
-    # For parallel architecture, get initial from navigation branch
-    if machine.get("type") == "parallel" and "navigation" in machine.get("states", {}):
-        initial = machine["states"]["navigation"].get("initial", "app_idle")
+    # Handle parallel architecture
+    initial_states = []
+    if machine.get("type") == "parallel":
+        for branch_config in machine.get("states", {}).values():
+            b_initial = branch_config.get("initial")
+            if b_initial:
+                initial_states.append(b_initial)
     else:
         initial = machine.get("initial", "")
+        if initial:
+            initial_states.append(initial)
     
     def dfs(state, visited, path):
         if state in visited:
@@ -235,18 +398,30 @@ def detect_loops(machine: dict) -> list:
         visited.add(state)
         path.append(state)
         
-        state_config = _resolve_state(states, state)
+        state_config = _resolve_state_path(states, state)
         if not state_config:
             return
         
         for event, target in state_config.get("on", {}).items():
             for t in _extract_targets(target):
                 t_clean = t.lstrip('.')
-                if t_clean and _resolve_state(states, t_clean):
+                if t_clean and _resolve_state_path(states, t_clean):
                     dfs(t_clean, visited.copy(), path.copy())
+        
+        # Also check initial sub-states for compound states
+        sub_initials = _get_initial_sub_states(states, state)
+        for sub_path in sub_initials:
+            if sub_path not in visited:
+                dfs(sub_path, visited.copy(), path.copy())
     
-    if _resolve_state(states, initial):
-        dfs(initial, set(), [])
+    for initial in initial_states:
+        if _resolve_state_path(states, initial):
+            dfs(initial, set(), [])
+            # Also start DFS from initial sub-states
+            sub_initials = _get_initial_sub_states(states, initial)
+            for sub_path in sub_initials:
+                if _resolve_state_path(states, sub_path):
+                    dfs(sub_path, set(), [])
     
     return loops
 
@@ -352,10 +527,17 @@ def run_fuzz_test(machine: dict, num_paths: int = 100, max_steps_per_path: int =
         "coverage": f"{len(reachable_states)}/{len(all_states)} states reachable",
     }
     
+    # For parallel machines, report the navigation branch's initial as the main initial state
+    if machine.get("type") == "parallel":
+        nav_branch = machine.get("states", {}).get("navigation", {})
+        reported_initial = nav_branch.get("initial", "unknown")
+    else:
+        reported_initial = machine.get("initial", "unknown")
+    
     return {
         "timestamp": datetime.now().isoformat(),
         "machine_id": machine.get("id", "unknown"),
-        "initial_state": machine.get("initial", "unknown"),
+        "initial_state": reported_initial,
         "summary": summary,
         "bugs": bugs_found,
         "path_details": {

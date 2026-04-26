@@ -180,7 +180,7 @@ class FrontendRunner:
             }
         return {"success": True, "output": self.analyst_output}
     
-    def run_spec(self, analyst_output: str, spec_machine: str, critic_feedback: str) -> dict:
+    def run_spec(self, analyst_output: str, spec_machine: str, critic_feedback: str, validator_feedback: dict = None) -> dict:
         """Runs spec generation (iterative approach)."""
         args = ["--context", self.context_file]
         
@@ -190,6 +190,12 @@ class FrontendRunner:
             args.extend(["--machine", spec_machine])
         if os.path.exists(critic_feedback):
             args.extend(["--critic-feedback", critic_feedback])
+        
+        # Pass validator feedback as JSON string if available
+        if validator_feedback:
+            import json as json_mod
+            validator_json = json_mod.dumps(validator_feedback)
+            args.extend(["--validator-feedback", validator_json])
         
         result = self._run_module("spec", args, timeout=1800)
         if result.get("error"):
@@ -283,7 +289,7 @@ class FrontendRunner:
                         print(f"  [stderr] {line}")
             
             # Parse the validation report
-            output_text = result.get("stdout", "")
+            output_text = result.stdout or ""
             quality_score = None
             total_issues = 0
             critical_count = 0

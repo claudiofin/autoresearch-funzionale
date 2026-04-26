@@ -312,7 +312,9 @@ def create_missing_target_states(machine: dict) -> dict:
                     current[part]["states"] = {}
                 current = current[part]["states"]
 
-    def walk_states(states_dict):
+    def walk_states(states_dict, depth=0):
+        if depth > 10:
+            return  # Safety limit to prevent infinite recursion
         # Collect all targets first, then create them (avoid modifying dict during iteration)
         targets_to_create = []
         
@@ -335,7 +337,7 @@ def create_missing_target_states(machine: dict) -> dict:
                             targets_to_create.append(t)
             
             if "states" in state_config:
-                walk_states(state_config["states"])
+                walk_states(state_config["states"], depth + 1)
         
         # Now create all missing targets
         for target in targets_to_create:

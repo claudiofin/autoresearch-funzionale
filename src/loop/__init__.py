@@ -81,6 +81,7 @@ class AutonomousLoop:
         self.history = []
         self.quality_history = []
         self.last_critical_issues = 0  # Track critical issues from last critic run
+        self.last_validator_result = None  # Track validator result for feedback to next iteration
         
         # Sub-modules
         self.runner = FrontendRunner(
@@ -207,10 +208,11 @@ class AutonomousLoop:
         if analyst_result.get("error"):
             result["errors"].append(f"Analyst: {analyst_result['error']}")
         
-        # Step 2: Spec generation
+        # Step 2: Spec generation (pass validator feedback from previous iteration)
         print("\n📝 Step 2: Spec generation...")
         spec_result = self.runner.run_spec(
-            self.analyst_output, self.spec_machine, self.critic_feedback
+            self.analyst_output, self.spec_machine, self.critic_feedback,
+            validator_feedback=self.last_validator_result
         )
         result["steps"]["spec"] = spec_result
         if spec_result.get("error"):
@@ -225,10 +227,20 @@ class AutonomousLoop:
         elif validator_result.get("quality_score") is not None:
             score = validator_result["quality_score"]
             dead_ends = validator_result.get("dead_end_count", 0)
-            print(f"  Quality Score: {score}/100, Dead-end states: {dead_ends}")
+            unreachable = validator_result.get("unreachable_count", 0)
+            print(f"  Quality Score: {score}/100, Dead-end states: {dead_ends}, Unreachable: {unreachable}")
             self.quality_history.append(score)
             if dead_ends > 0:
                 result["warnings"] = result.get("warnings", []) + [f"{dead_ends} dead-end states found"]
+            
+            # Store validator result for feedback to next iteration
+            self.last_validator_result = {
+                "quality_score": score,
+                "dead_end_states": [],  # Will be populated by json_validator
+                "unreachable_states": [],
+                "dead_end_count": dead_ends,
+                "unreachable_count": unreachable
+            }
         
         # Step 2.6: JSON Structural Validator (deterministic judge - "Pathfinder")
         print("\n⚖️  Step 2.6: JSON structural validation (Pathfinder)...")
@@ -256,6 +268,14 @@ class AutonomousLoop:
                 result["warnings"] = result.get("warnings", []) + [
                     f"{critical_count} critical structural issues (duplicate states, orphan transitions)"
                 ]
+            
+            # Update validator feedback with JSON validator details for next iteration
+            if self.last_validator_result is not None:
+                self.last_validator_result["json_score"] = json_score
+                self.last_validator_result["total_issues"] = total_issues
+                self.last_validator_result["critical_count"] = critical_count
+                self.last_validator_result["high_count"] = high_count
+                self.last_validator_result["is_valid"] = is_valid
         
         # Step 3: Fuzzer
         print("\n🔍 Step 3: Fuzzer...")
@@ -263,6 +283,40 @@ class AutonomousLoop:
         result["steps"]["fuzzer"] = fuzz_result
         if fuzz_result.get("error"):
             result["errors"].append(f"Fuzzer: {fuzz_result['error']}")
+        
+        # FIX: Populate validator feedback with fuzzer data for next iteration
+        # The fuzzer has the most accurate reachability analysis
+        if fuzz_result.get("success") and os.path.exists(self.fuzz_report):
+            try:
+                with open(self.fuzz_report, "r") as f:
+                    fuzz_data = json.load(f)
+                
+                # Extract unreachable states from fuzzer
+                unreachable_from_fuzzer = fuzz_data.get("unreachable_states", [])
+                
+                # Extract dead-end states from fuzzer bugs
+                dead_end_from_fuzzer = []
+                for bug in fuzz_data.get("bugs", []):
+                    if bug.get("type") == "dead_end_state":
+                        state = bug.get("state", "")
+                        if state and state != "N/A":
+                            dead_end_from_fuzzer.append(state)
+                
+                # Update validator feedback with fuzzer data
+                if self.last_validator_result is not None:
+                    self.last_validator_result["unreachable_states"] = unreachable_from_fuzzer
+                    self.last_validator_result["dead_end_states"] = dead_end_from_fuzzer
+                    
+                    # Also update counts from fuzzer summary
+                    fuzzer_summary = fuzz_data.get("summary", {})
+                    if "reachable_states" in fuzzer_summary:
+                        self.last_validator_result["fuzzer_reachable"] = fuzzer_summary["reachable_states"]
+                    if "total_states" in fuzzer_summary:
+                        self.last_validator_result["fuzzer_total"] = fuzzer_summary["total_states"]
+                    
+                    print(f"  📊 Validator feedback updated: {len(unreachable_from_fuzzer)} unreachable, {len(dead_end_from_fuzzer)} dead-ends")
+            except (json.JSONDecodeError, KeyError) as e:
+                print(f"  ⚠️  Could not parse fuzz report for feedback: {e}")
         
         # Step 4: Critic
         print("\n🧐 Step 4: Critic...")

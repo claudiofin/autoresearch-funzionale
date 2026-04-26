@@ -1,5 +1,9 @@
 """
-Spec orchestrator - coordinates the iterative spec generation pipeline.
+Spec orchestrator - coordinates the multi-step spec generation pipeline.
+Step 1: Generate states
+Step 2: Generate transitions
+Step 3: Generate workflows
+Step 4: Merge, compile, and validate
 """
 
 import os
@@ -9,11 +13,11 @@ import time
 
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from pipeline.frontend.spec.llm_client import call_llm_spec
+from pipeline.frontend.spec.llm_client import call_llm_states, call_llm_transitions, call_llm_workflows
 from state_machine.builder import generate_base_machine, build_state_config, add_transitions, add_transitions_to_branch, normalize_machine, add_workflows_to_machine, compile_machine
 from state_machine.post_processing import remove_toplevel_duplicates, complete_missing_branches, clean_unreachable_states, validate_no_critical_patterns, create_missing_target_states
 from diagrams.plantuml import generate_plantuml_statechart, generate_plantuml_sequence
-from diagrams.markdown import generate_spec_markdown
+from diagrams.markdown import generate_spec_markdown, _make_serializable
 
 
 def run_analysis(
@@ -22,14 +26,23 @@ def run_analysis(
     time_budget: int, 
     analyst_suggestions: dict = None, 
     existing_machine_file: str = None,
-    critic_feedback: dict = None
+    critic_feedback: dict = None,
+    validator_feedback: dict = None
 ) -> dict:
-    """Run the functional analysis and generate spec.md.
+    """Run the multi-step functional analysis and generate spec.md.
     
-    ITERATIVE APPROACH:
-    1. Load existing machine (if exists)
-    2. Pass it to the LLM with suggestions and critic feedback
-    3. The LLM modifies the machine instead of regenerating it
+    MULTI-STEP APPROACH:
+    1. Generate states (focused on completeness)
+    2. Generate transitions (focused on connectivity)
+    3. Generate workflows (focused on completion)
+    4. Merge, compile, validate
+    
+    VALIDATOR FEEDBACK LOOP:
+    If validator_feedback is provided (from previous iteration), it contains:
+    - unreachable_states: list of state names that are not reachable
+    - dead_end_states: list of states with no exit transitions
+    - quality_score: current quality score
+    This feedback is passed to the LLM to fix issues.
     """
     
     start_time = time.time()
@@ -54,38 +67,78 @@ def run_analysis(
     if critic_feedback:
         critical = critic_feedback.get("summary", {}).get("critical_issues", [])
         print(f"  🚨 Critic feedback: {len(critical)} critical issues")
-    print("  🚀 Generating with LLM...")
+    if validator_feedback:
+        unreachable = validator_feedback.get("unreachable_states", [])
+        dead_ends = validator_feedback.get("dead_end_states", [])
+        score = validator_feedback.get("quality_score", "N/A")
+        print(f"  📊 Validator feedback: score={score}, unreachable={len(unreachable)}, dead_ends={len(dead_ends)}")
     
-    # Call LLM (iterative approach)
-    try:
-        llm_data = call_llm_spec(
-            context_text, 
-            analyst_suggestions=analyst_suggestions,
-            existing_machine=existing_machine,
-            critic_feedback=critic_feedback
-        )
-        print(f"  ✅ LLM: {len(llm_data.get('states', []))} states, {len(llm_data.get('transitions', []))} transitions")
-    except Exception as e:
-        print(f"❌ ERROR: LLM failed: {e}")
-        print("   The system cannot work without an LLM.")
-        sys.exit(1)
+    # ========================================================================
+    # STEP 1: Generate States
+    # ========================================================================
+    existing_states = None
+    if existing_machine:
+        existing_states = list(existing_machine.get("states", {}).keys())
+    
+    states = call_llm_states(
+        context_text, 
+        critic_feedback=critic_feedback,
+        existing_states=existing_states,
+        validator_feedback=validator_feedback,
+        max_retries=3
+    )
+    
+    # ========================================================================
+    # STEP 2: Generate Transitions
+    # ========================================================================
+    existing_transitions = None
+    if existing_machine:
+        existing_transitions = []
+        for sn, sc in existing_machine.get("states", {}).items():
+            for ev, tgt in sc.get("on", {}).items():
+                existing_transitions.append({"from_state": sn, "to_state": tgt, "event": ev})
+    
+    transitions = call_llm_transitions(
+        context_text,
+        states=states,
+        existing_transitions=existing_transitions,
+        validator_feedback=validator_feedback,
+        max_retries=3
+    )
+    
+    # ========================================================================
+    # STEP 3: Generate Workflows
+    # ========================================================================
+    workflows = call_llm_workflows(
+        context_text,
+        states=states,
+        transitions=transitions,
+        analyst_suggestions=analyst_suggestions,
+        validator_feedback=validator_feedback,
+        max_retries=3
+    )
+    
+    print(f"\n  📊 LLM Results: {len(states)} states, {len(transitions)} transitions, {len(workflows)} workflows")
+    
+    # ========================================================================
+    # STEP 4: Build Machine
+    # ========================================================================
     
     # Determine if we should use parallel states architecture
-    # Use parallel if: analyst suggested workflows OR existing machine is parallel
-    has_workflows = analyst_suggestions and len(analyst_suggestions.get("workflows", [])) > 0
+    has_workflows = len(workflows) > 0 or (analyst_suggestions and len(analyst_suggestions.get("workflows", [])) > 0)
     is_existing_parallel = existing_machine and existing_machine.get("type") == "parallel"
     use_parallel = has_workflows or is_existing_parallel
     
     # Build machine using modular builder
     machine = None
     
-    if existing_machine:
-        # Start from existing machine
+    if existing_machine and not critic_feedback:
+        # Iterative mode: start from existing machine, add new states
         machine = existing_machine.copy()
         machine["states"] = dict(existing_machine.get("states", {}))
         
         # Add new states from LLM suggestions
-        for state in llm_data.get("states", []):
+        for state in states:
             state_name = state["name"]
             
             # Ignore dot-notation clones generated by LLM (e.g. success.dashboard)
@@ -114,7 +167,7 @@ def run_analysis(
                     machine["states"][state_name]["states"] = existing_subs
         
         # Add transitions
-        add_transitions(machine, llm_data.get("transitions", []))
+        add_transitions(machine, transitions)
     else:
         # Generate from scratch with parallel architecture if workflows exist
         machine = generate_base_machine(use_parallel=use_parallel)
@@ -122,64 +175,59 @@ def run_analysis(
         if use_parallel:
             # In parallel mode, states go into navigation branch
             nav_branch = machine["states"]["navigation"]
-            for state in llm_data.get("states", []):
+            for state in states:
                 state_name = state["name"]
                 nav_branch["states"][state_name] = build_state_config(state)
             
             # Add transitions to navigation branch
-            add_transitions_to_branch(machine, llm_data.get("transitions", []))
+            add_transitions_to_branch(machine, transitions)
             
             # Add workflows to active_workflows branch
             if has_workflows:
-                workflows = analyst_suggestions.get("workflows", [])
-                add_workflows_to_machine(machine, workflows)
-                print(f"  🔄 Added {len(workflows)} workflows to active_workflows branch")
+                workflow_list = workflows if workflows else analyst_suggestions.get("workflows", [])
+                add_workflows_to_machine(machine, workflow_list)
+                print(f"  🔄 Added {len(workflow_list)} workflows to active_workflows branch")
         else:
             # Legacy flat mode
-            for state in llm_data.get("states", []):
+            for state in states:
                 state_name = state["name"]
                 machine["states"][state_name] = build_state_config(state)
             
             # Add transitions
-            add_transitions(machine, llm_data.get("transitions", []))
+            add_transitions(machine, transitions)
     
-    # Normalize machine
-    machine = normalize_machine(machine)
-    
-    # Post-processing: remove top-level duplicate states (before BFS cleanup)
-    machine = remove_toplevel_duplicates(machine)
-    
-    # Post-processing: complete missing transition branches
-    machine = complete_missing_branches(machine)
-    
-    # Post-processing: create missing target states to prevent black holes
-    machine = create_missing_target_states(machine)
-    
-    # Post-processing: remove unreachable states and XState keywords
-    machine = clean_unreachable_states(machine)
-    
-    # Apply Pattern Compiler (error injection, global exit, dead state cleanup)
+    # Apply Pattern Compiler (Normalization, Auto-injection, Dedup, Error Injection, Global Exit, Dead State Cleanup, Target Resolution, Context Awareness)
     machine = compile_machine(machine)
     
-    # Post-processing: validate against critical rules 15, 16, 17
+    # Post-processing: validate against critical rules
     violations = validate_no_critical_patterns(machine)
     if violations:
         print(f"\n  ⚠️  CRITICAL RULE VIOLATIONS DETECTED ({len(violations)}):")
         for v in violations:
             print(f"    ❌ {v}")
         print(f"\n  💡 These violations will be reported to the critic for the next iteration.")
-        print(f"     The LLM should fix them when it sees the critic feedback.\n")
     else:
-        print(f"  ✅ No critical rule violations (rules 15, 16, 17 passed)")
+        print(f"  ✅ No critical rule violations")
     
     print(f"Generated state machine: {len(machine['states'])} states")
     
     # Generate diagrams using modular components
     statechart = generate_plantuml_statechart(machine)
-    flows = llm_data.get("flows", [])
+    flows = []  # Flows come from LLM data, but we don't have them in multi-step mode
     sequence = generate_plantuml_sequence(flows)
     
     # Generate markdown spec using modular component
+    llm_data = {
+        "states": states,
+        "transitions": transitions,
+        "workflows": workflows,
+        "edge_cases": [],
+        "flows": [],
+        "api_endpoints": [],
+        "error_handling": [],
+        "data_validation": []
+    }
+    
     spec_content = generate_spec_markdown(
         machine=machine,
         llm_data=llm_data,
@@ -192,21 +240,46 @@ def run_analysis(
     with open(output_file, "w", encoding="utf-8") as f:
         f.write(spec_content)
     
-    # Write XState
+    # Write XState (make serializable to handle lambda/function objects)
     xstate_file = output_file.replace(".md", "_machine.json")
     with open(xstate_file, "w", encoding="utf-8") as f:
-        json.dump(machine, f, indent=2)
+        json.dump(_make_serializable(machine), f, indent=2)
     
     elapsed = time.time() - start_time
     
     metrics = {
         "states_count": len(machine["states"]),
         "transitions_count": sum(len(s.get("on", {})) for s in machine["states"].values()),
-        "edge_cases_count": len(llm_data.get("edge_cases", [])),
-        "error_types_count": len(llm_data.get("error_handling", [])) or 1,
+        "edge_cases_count": 0,
+        "error_types_count": 1,
         "elapsed_seconds": elapsed,
         "spec_file": output_file,
         "machine_file": xstate_file,
     }
     
     return metrics
+
+
+def run_multi_step_spec(
+    context_file: str,
+    output_file: str,
+    time_budget: int,
+    analyst_suggestions: dict = None,
+    existing_machine_file: str = None,
+    critic_feedback: dict = None,
+    validator_feedback: dict = None
+) -> dict:
+    """Alias for run_analysis - multi-step spec generation with validator feedback.
+    
+    This function provides a clear entry point for iterative improvement
+    when validator feedback is available from a previous iteration.
+    """
+    return run_analysis(
+        context_file,
+        output_file,
+        time_budget,
+        analyst_suggestions=analyst_suggestions,
+        existing_machine_file=existing_machine_file,
+        critic_feedback=critic_feedback,
+        validator_feedback=validator_feedback
+    )

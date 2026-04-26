@@ -38,7 +38,9 @@ class TestGenerateBaseMachine:
 
     def test_states_starts_empty_flat(self):
         machine = generate_base_machine(use_parallel=False)
-        assert machine["states"] == {}
+        # ANTI-FRATTALE: Initial state now has bootstrap transition
+        assert "app_idle" in machine["states"]
+        assert machine["states"]["app_idle"]["on"]["START_APP"] == "app_loading"
 
     def test_states_has_parallel_branches(self):
         machine = generate_base_machine(use_parallel=True)

@@ -81,18 +81,20 @@ def _suggest_exit_transitions(state_name: str) -> str:
         return "Add at least one appropriate exit transition (GO_BACK, CANCEL, or a domain-specific event)"
 
 
-def _collect_all_states_recursive(states: dict, prefix: str = "") -> dict:
+def _collect_all_states_recursive(states: dict, prefix: str = "", depth: int = 0) -> dict:
     """Collect all states with their full paths.
     
     Returns:
         Dict mapping full_path → state_config
     """
+    if depth > 15:
+        return {}  # Safety limit to prevent infinite recursion
     result = {}
     for name, config in states.items():
         full_path = f"{prefix}.{name}" if prefix else name
         result[full_path] = config
         if "states" in config and isinstance(config["states"], dict):
-            result.update(_collect_all_states_recursive(config["states"], full_path))
+            result.update(_collect_all_states_recursive(config["states"], full_path, depth + 1))
     return result
 
 
@@ -247,22 +249,46 @@ def _resolve_target_in_branch(target: str, current: str, branch: str, branch_sta
 
 
 def _bfs_sequential(machine: dict) -> set:
-    """BFS for sequential (non-parallel) state machines."""
+    """BFS for sequential (non-parallel) state machines.
+    
+    FIX: When entering a compound state, also mark its initial sub-state
+    (and recursively) as reachable. This prevents false positives for
+    sub-states like 'auth_guard.loading', 'dashboard.ready', etc.
+    """
     states = machine.get("states", {})
     initial = machine.get("initial", "")
     
     if not initial or initial not in states:
         return set()
     
-    reachable = {initial}
-    queue = deque([initial])
+    reachable = set()
+    queue = deque()
+    
+    def _add_state_and_descendants(state_name: str, parent_config: dict, prefix: str = ""):
+        """Add a state and its initial sub-state chain to reachable."""
+        full_path = f"{prefix}.{state_name}" if prefix else state_name
+        if full_path in reachable:
+            return
+        reachable.add(full_path)
+        
+        config = parent_config.get(state_name, {})
+        sub_states = config.get("states", {})
+        if sub_states:
+            # Mark the initial sub-state as reachable
+            sub_initial = config.get("initial")
+            if sub_initial and sub_initial in sub_states:
+                _add_state_and_descendants(sub_initial, sub_states, full_path)
+    
+    _add_state_and_descendants(initial, states)
+    queue.append(initial)
     
     while queue:
         current = queue.popleft()
         if current not in states:
             continue
         
-        transitions = states[current].get("on", {})
+        config = states[current]
+        transitions = config.get("on", {})
         for event, target in transitions.items():
             for t in _extract_targets(target):
                 if t.startswith("."):
@@ -270,7 +296,14 @@ def _bfs_sequential(machine: dict) -> set:
                 
                 if t and t not in reachable:
                     reachable.add(t)
+                    # If target is a compound state, also add its initial sub-state
                     if t in states:
+                        target_config = states[t]
+                        sub_states = target_config.get("states", {})
+                        if sub_states:
+                            sub_initial = target_config.get("initial")
+                            if sub_initial and sub_initial in sub_states:
+                                _add_state_and_descendants(sub_initial, sub_states, t)
                         queue.append(t)
     
     return reachable

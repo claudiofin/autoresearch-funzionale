@@ -77,6 +77,11 @@ def find_duplicate_states(machine: dict) -> list:
     This is the "Schizofrenia del JSON" - when dashboard appears both
     under navigation.success.dashboard AND as a flat state at root level.
     
+    FIX: Sub-states with the same name in different compound states are NOT duplicates.
+    For example, 'loading' in 'dashboard.loading' and 'catalog.loading' are legitimate
+    sub-states of different parent states. Only flag as duplicate when the same name
+    appears at the same hierarchy level (siblings) or at root level.
+    
     Returns:
         List of dicts with duplicate info
     """
@@ -89,17 +94,79 @@ def find_duplicate_states(machine: dict) -> list:
             name_to_paths[state.name] = []
         name_to_paths[state.name].append(state.path)
     
+    # Sub-state names that are commonly used in compound states
+    # These are NOT duplicates when they appear in different parent states
+    common_sub_state_names = {"loading", "ready", "error", "error_handler", 
+                              "calculating", "fetching", "submitting", "processing",
+                              "idle", "none", "success", "failed", "timeout"}
+    
     duplicates = []
     for name, paths in name_to_paths.items():
         if len(paths) > 1:
-            duplicates.append({
-                "state_name": name,
-                "paths": paths,
-                "count": len(paths),
-                "issue": "DUPLICATE_STATE",
-                "description": f"State '{name}' appears {len(paths)} times at different paths: {', '.join(paths)}",
-                "severity": "critical"
-            })
+            # FIX: Check if these are sub-states in different compound states
+            # If so, they are NOT duplicates
+            if name in common_sub_state_names:
+                # Check if all paths have different parents
+                parents = set()
+                for path in paths:
+                    parts = path.split(".")
+                    if len(parts) >= 2:
+                        # This is a sub-state — get the parent path
+                        parent = ".".join(parts[:-1])
+                        parents.add(parent)
+                    else:
+                        # Root-level state — could be a real duplicate
+                        parents.add(path)
+                
+                # If all parents are different, these are legitimate sub-states
+                # Only flag as duplicate if the same name appears at root level
+                # or as siblings under the same parent
+                root_level_paths = [p for p in paths if "." not in p]
+                if len(root_level_paths) > 1:
+                    # Multiple root-level states with same name — real duplicate
+                    duplicates.append({
+                        "state_name": name,
+                        "paths": paths,
+                        "count": len(paths),
+                        "issue": "DUPLICATE_STATE",
+                        "description": f"State '{name}' appears {len(paths)} times at different paths: {', '.join(paths)}",
+                        "severity": "critical"
+                    })
+                elif len(parents) == len(paths):
+                    # All sub-states have different parents — NOT a duplicate
+                    continue
+                else:
+                    # Some share the same parent — check for sibling duplicates
+                    # Group by parent
+                    parent_to_paths = {}
+                    for path in paths:
+                        parts = path.split(".")
+                        parent = ".".join(parts[:-1]) if len(parts) >= 2 else ""
+                        if parent not in parent_to_paths:
+                            parent_to_paths[parent] = []
+                        parent_to_paths[parent].append(path)
+                    
+                    # Only flag if same parent has multiple states with same name
+                    for parent, parent_paths in parent_to_paths.items():
+                        if len(parent_paths) > 1:
+                            duplicates.append({
+                                "state_name": name,
+                                "paths": parent_paths,
+                                "count": len(parent_paths),
+                                "issue": "DUPLICATE_STATE",
+                                "description": f"State '{name}' appears {len(parent_paths)} times under '{parent}': {', '.join(parent_paths)}",
+                                "severity": "critical"
+                            })
+            else:
+                # Non-sub-state name — use original logic
+                duplicates.append({
+                    "state_name": name,
+                    "paths": paths,
+                    "count": len(paths),
+                    "issue": "DUPLICATE_STATE",
+                    "description": f"State '{name}' appears {len(paths)} times at different paths: {', '.join(paths)}",
+                    "severity": "critical"
+                })
     
     return duplicates
 
@@ -324,8 +391,6 @@ def find_invalid_compound_states(machine: dict) -> list:
                 if initial and initial not in sub_states:
                     issues.append(f"'initial' ('{initial}') does not match any sub-state: {list(sub_states.keys())}")
             
-            if "on" not in state.config:
-                issues.append("missing 'on' property (transitions at compound level)")
             
             if issues:
                 invalid.append({

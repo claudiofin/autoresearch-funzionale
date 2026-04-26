@@ -40,6 +40,17 @@ CRITICAL Rules:
 4. Include at least: loading, error, success, empty states
 5. Include transitions for: forward/back navigation, error, cancellation
 6. Edge cases: timeout, network error, expired session, invalid input
+7. **AUTH FLOW IS MANDATORY**: Every app MUST have an authentication flow.
+   - Include states: authenticating, auth_success, auth_error, session_expired
+   - The initial state MUST transition to authenticating on START_APP
+   - Without auth, the app is insecure and the specification is INVALID
+8. **HIERARCHICAL STATES FOR EVERY PAGE**: Every main screen/page MUST have
+   loading → ready → error sub-states. Flat states without loading are UX failures.
+   - Example: dashboard.loading → dashboard.ready → dashboard.error
+   - The "initial" property MUST point to "loading"
+9. **NO SELF-REFERENCING TRANSITIONS**: Never create a transition where from_state == to_state.
+   - WRONG: {"from": "app_initial", "to": "app_initial", "event": "GLOBAL_EXIT"}
+   - GLOBAL_EXIT must point to a DIFFERENT state (e.g., navigation.app_idle)
 
 FUNDAMENTAL RULE - NO DEAD-END STATES:
 Every state MUST have at least one exit transition (except the final success state).
@@ -87,14 +98,57 @@ Rules:
 8. When retry fails, use assign action to increment retryCount
 9. After 3 failed retries, transition to a session_expired or max_retries_exceeded state
 10. Cover: auth, core flow, error handling, empty states
-11. INITIAL STATE: Choose an appropriate name from the app context.
-    - Analyze the project description to identify the natural starting point.
-    - Examples: "browse_home", "device_standby", "feed_view", "main_menu", "patient_login", "dashboard", "home", etc.
-    - The initial state MUST exist, MUST be a resting state (no automatic actions in entry),
-      and MUST listen for a START event (e.g., START_APP, INIT, START_GAME, CONNECT, etc.) that triggers initial setup.
-    - All states must be reachable from this initial state.
-12. Every state must have at least one exit transition (no dead-end)
-13. All states must be reachable from the initial state
+
+=== RULE 11: MANDATORY ENTRY POINT (NON-NEGOTIABLE) ===
+The initial state (app_initial, home, dashboard, etc.) MUST have a START_APP transition to the authenticating state.
+This is the "door" into your app. Without it, the fuzzer enters and freezes.
+
+MANDATORY PATTERN:
+  State: "app_initial" (or your chosen initial name)
+    - entry: [] (NO automatic actions — it's a resting state)
+    - on: { "START_APP": "navigation.authenticating" }
+  
+  State: "authenticating" (or "login", "token_validation")
+    - entry: ["validateToken", "checkSession"]
+    - on: { "AUTH_SUCCESS": "navigation.dashboard", "AUTH_FAILED": "navigation.auth_error" }
+  
+  State: "auth_error"
+    - on: { "RETRY_AUTH": "navigation.authenticating", "CANCEL": "app_initial" }
+  
+  State: "session_expired"
+    - on: { "REAUTHENTICATE": "navigation.authenticating", "CANCEL": "app_initial" }
+
+WITHOUT THIS AUTH FLOW, THE SPECIFICATION IS INVALID.
+
+=== RULE 12: DEPTH LIMIT — MAX 3 LEVELS (ANTI-FRATTALE) ===
+NEVER nest states deeper than 3 levels from the branch root.
+- Level 1: navigation.dashboard (OK)
+- Level 2: navigation.dashboard.loading (OK)
+- Level 3: navigation.dashboard.loading.calculating (OK — MAX)
+- Level 4: navigation.dashboard.loading.calculating.progress (WRONG — TOO DEEP)
+
+If you need more depth, use WORKFLOWS branch instead:
+  active_workflows.benchmark.calculating (OK — workflow branch allows deeper nesting)
+
+ANTI-INCEPTION CHECK:
+- NEVER create: dashboard.loading.loading (duplicate consecutive)
+- NEVER create: error.error_handler.error_handler (infinite nesting)
+- NEVER create: app_initial.app_initial.app_initial (recursive loop)
+- If you see a pattern repeating, STOP and go back to parent level.
+
+=== RULE 13: SPECIFIC DOMAIN EVENTS (NOT GENERIC) ===
+Use domain-specific event names, not generic NEXT/CANCEL:
+- WRONG: {{"from": "benchmark", "to": "results", "event": "NEXT"}}
+- CORRECT: {{"from": "benchmark.discovery", "to": "benchmark.results", "event": "VIEW_BENCHMARK_RESULTS"}}
+
+- WRONG: {{"from": "purchase_group", "to": "confirmation", "event": "CONFIRM"}}
+- CORRECT: {{"from": "purchase_group.review", "to": "purchase_group.confirmation", "event": "CONFIRM_GROUP_PURCHASE"}}
+
+- WRONG: {{"from": "catalog", "to": "product_detail", "event": "SELECT"}}
+- CORRECT: {{"from": "catalog.list", "to": "catalog.product_detail", "event": "VIEW_PRODUCT"}}
+
+Domain events make the state machine self-documenting and prevent confusion between workflows.
+
 14. HIERARCHICAL STATES: The main CONTENT state (name it based on context: "success", "dashboard", "feed", "connected", etc.)
     MUST be hierarchical (nested). Analyze the project context and create a sub-state for each main area/screen of the app.
     - Identify all main screens/areas from the project description.
@@ -216,6 +270,11 @@ PRE-GENERATION CHECKLIST (verify before outputting JSON):
 - [ ] CANCEL has TWO entries: one with guard "hasPreviousState" → success, one with guard "!hasPreviousState" → app_idle
 - [ ] RETRY_FETCH has TWO entries: one with guard "canRetry" → loading, one with guard "!canRetry" → session_expired
 - [ ] Every conditional event appears EXACTLY TWICE in the transitions array (once positive, once negative)
+- [ ] app_initial has START_APP → authenticating transition
+- [ ] authenticating has AUTH_SUCCESS → dashboard and AUTH_FAILED → auth_error transitions
+- [ ] No state path exceeds 3 levels deep (branch.parent.child = OK, branch.parent.child.grandchild = WRONG)
+- [ ] No recursive patterns (app_initial.app_initial, loading.loading, error.error_handler.error_handler)
+- [ ] Events are domain-specific (VIEW_BENCHMARK_RESULTS, not NEXT; CONFIRM_GROUP_PURCHASE, not CONFIRM)
 
 IF YOU MISS ANY BRANCH, THE STATE MACHINE IS BROKEN AND THE USER WILL LOSE DATA.
 This is not a suggestion - it is a REQUIREMENT. Generate BOTH branches for every conditional event.
@@ -302,4 +361,40 @@ Be thorough. Look for:
 5. UX problems (confusing states, missing feedback)
 6. Edge cases the fuzzer might have missed
 7. **MISSING FLOWS**: Compare the project context with the current state machine. Are there any features or flows described in the context that are completely absent from the state machine? (e.g., if the app has login but no auth flow exists, if it has search but no search states)
+8. **STRUCTURAL VALIDITY — COMPOUND STATES MUST HAVE `initial`**:
+   - Every state that has sub-states (nested "states" object) MUST define an "initial" property specifying which sub-state to enter first.
+   - Without "initial", the state machine freezes — it cannot enter any sub-state.
+   - Check: if a state has "states": { ... } but NO "initial": "...", flag it as CRITICAL.
+   - Common pattern: loading → ready → error sub-states must have "initial": "loading".
+   - Error handler sub-states must have "initial": "error_handler".
+9. **ANTI-INCEPTION CHECK**:
+   - Never allow error_handler to be nested inside another error_handler.
+   - If you see states like "error.error_handler.error_handler", the machine has infinite nesting.
+   - Each state should have AT MOST ONE level of error_handler sub-state.
+10. **REACHABILITY**:
+    - Every state must be reachable from the initial state via some transition path.
+    - If a state exists but no transition leads to it, it's a "ghost state" — remove it or add the missing transition.
+    - The fuzzer reports "Reachable: X/Y" — if X is much smaller than Y, there are unreachable states.
+11. **AUTH FLOW ENFORCEMENT**:
+    - Every app MUST have an authentication flow. Check for these states:
+      * authenticating (or similar — the state that handles login)
+      * auth_success (or similar — after successful authentication)
+      * auth_error (or similar — when authentication fails)
+      * session_expired (or similar — when the user's session expires)
+    - The initial state should transition to the authenticating state on START_APP.
+    - If NO auth-related states exist, flag as CRITICAL-004: "Missing Authentication Flow".
+    - This is NON-NEGOTIABLE: an app without auth is a security vulnerability.
+12. **HIERARCHY ENFORCEMENT — NO FLAT STATES**:
+    - Every main screen/page MUST have loading → ready → error sub-states.
+    - Flat states (states with entry actions but NO sub-states) are UX failures.
+    - Check: if a state like "dashboard" or "catalog" has entry actions but no "states" object,
+      flag it as CRITICAL-003: "Missing Loading State — user sees blank screen".
+    - The "initial" property of such states MUST be "loading".
+13. **SELF-REFERENCING TRANSITION DETECTION**:
+    - A transition where from_state == to_state is a logic error (infinite loop).
+    - Check ALL transitions: if "from_state" equals "to_state", flag as CRITICAL.
+    - Common case: GLOBAL_EXIT pointing to the same state it's defined in.
+    - GLOBAL_EXIT must always point to a DIFFERENT state (e.g., navigation.app_idle).
+    - Also check for transitions like {"from": "app_initial", "to": "#navigation.app_initial"}
+      where the target resolves back to the source state.
 """
