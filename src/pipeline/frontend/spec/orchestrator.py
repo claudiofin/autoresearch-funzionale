@@ -18,7 +18,9 @@ from state_machine.builder import generate_base_machine, build_state_config, add
 from state_machine.post_processing import (
     remove_toplevel_duplicates, complete_missing_branches, clean_unreachable_states,
     validate_no_critical_patterns, create_missing_target_states,
-    fix_broken_transitions, remove_duplicate_states, fix_structural_issues
+    fix_broken_transitions, remove_duplicate_states, fix_structural_issues,
+    ensure_connectivity, fix_duplicate_state_names, fix_infinite_loops,
+    fix_root_navigation_duplicates
 )
 from diagrams.plantuml import generate_plantuml_statechart, generate_plantuml_sequence
 from diagrams.markdown import generate_spec_markdown, _make_serializable
@@ -217,6 +219,10 @@ def run_analysis(
             sub_states = branch_config.get("states", {})
             print(f"  🔍 [DEBUG]   {branch_name}: {len(sub_states)} sub-states: {list(sub_states.keys())[:10]}")
     
+    # Post-processing: Create missing target states (states referenced by transitions but not defined)
+    print("\n  🔧 Post-processing: Creating missing target states...")
+    machine = create_missing_target_states(machine)
+    
     # Post-processing: Fix broken transitions (point to non-existent states)
     print("\n  🔧 Post-processing: Fixing broken transitions...")
     machine = fix_broken_transitions(machine)
@@ -228,6 +234,22 @@ def run_analysis(
     # Post-processing: Fix structural issues (empty states, dead-ends, navigation duplicates)
     print("\n  🔧 Post-processing: Fixing structural issues...")
     machine = fix_structural_issues(machine)
+    
+    # Post-processing: Ensure connectivity (fix unreachable states)
+    print("\n  🔧 Post-processing: Ensuring connectivity...")
+    machine = ensure_connectivity(machine)
+    
+    # Post-processing: Fix duplicate state names at different paths
+    print("\n  🔧 Post-processing: Fixing duplicate state names...")
+    machine = fix_duplicate_state_names(machine)
+    
+    # Post-processing: Fix infinite loops
+    print("\n  🔧 Post-processing: Fixing infinite loops...")
+    machine = fix_infinite_loops(machine)
+    
+    # Post-processing: Fix root vs navigation duplicates
+    print("\n  🔧 Post-processing: Fixing root vs navigation duplicates...")
+    machine = fix_root_navigation_duplicates(machine)
     
     # Post-processing: validate against critical rules
     violations = validate_no_critical_patterns(machine)

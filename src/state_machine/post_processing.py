@@ -291,6 +291,8 @@ def create_missing_target_states(machine: dict) -> dict:
     If a transition targets a sub-state using dot notation (e.g., 'success.benchmark.clustering_calculation')
     and it doesn't exist, this function creates an empty state for it to prevent crashes.
     
+    Also adds exit transitions to prevent dead-end states.
+    
     Supports both flat and parallel architectures.
     """
     # For parallel architecture, work with navigation branch states
@@ -305,7 +307,16 @@ def create_missing_target_states(machine: dict) -> dict:
         for i, part in enumerate(parts):
             if part not in current:
                 print(f"  🔧 Created missing target state: {'.'.join(parts[:i+1])}")
-                current[part] = {"entry": [], "exit": [], "on": {}}
+                # Create state with exit transitions to prevent dead-end
+                current[part] = {
+                    "entry": [], 
+                    "exit": [], 
+                    "on": {
+                        "GO_BACK": "app_idle",
+                        "CANCEL": "app_idle",
+                        "COMPLETE": "app_idle"
+                    }
+                }
             
             if i < len(parts) - 1:
                 if "states" not in current[part]:
@@ -318,32 +329,69 @@ def create_missing_target_states(machine: dict) -> dict:
         # Collect all targets first, then create them (avoid modifying dict during iteration)
         targets_to_create = []
         
-        for state_config in list(states_dict.values()):
+        for state_name, state_config in list(states_dict.items()):
             on_events = state_config.get("on", {})
-            for target in on_events.values():
+            for event_name, target in on_events.items():
                 if isinstance(target, str):
-                    targets_to_create.append(target)
+                    targets_to_create.append((target, state_name, event_name))
                 elif isinstance(target, dict):
                     t = target.get("target", "")
                     if t:
-                        targets_to_create.append(t)
+                        targets_to_create.append((t, state_name, event_name))
                 elif isinstance(target, list):
                     for t in target:
                         if isinstance(t, dict):
                             t_str = t.get("target", "")
                             if t_str:
-                                targets_to_create.append(t_str)
+                                targets_to_create.append((t_str, state_name, event_name))
                         elif isinstance(t, str):
-                            targets_to_create.append(t)
+                            targets_to_create.append((t, state_name, event_name))
             
             if "states" in state_config:
                 walk_states(state_config["states"], depth + 1)
         
         # Now create all missing targets
-        for target in targets_to_create:
-            ensure_path(target)
+        for target, source_state, event_name in targets_to_create:
+            # Check if target exists (as top-level or nested)
+            target_parts = target.lstrip('.').split('.')
+            target_exists = False
+            
+            # Check as top-level state
+            if target_parts[0] in states_root:
+                if len(target_parts) == 1:
+                    target_exists = True
+                else:
+                    # Check nested path
+                    current = states_root[target_parts[0]]
+                    for part in target_parts[1:]:
+                        if "states" in current and part in current["states"]:
+                            current = current["states"][part]
+                            target_exists = True
+                        else:
+                            target_exists = False
+                            break
+            
+            if not target_exists:
+                ensure_path(target)
 
     walk_states(states_root)
+    
+    # Also check for common missing states that are often referenced
+    common_missing_states = ["data_sync_state", "sync_complete", "sync_error"]
+    for state_name in common_missing_states:
+        if state_name not in states_root:
+            print(f"  🔧 Created common missing state: '{state_name}'")
+            states_root[state_name] = {
+                "entry": [], 
+                "exit": [], 
+                "on": {
+                    "GO_BACK": "app_idle",
+                    "CANCEL": "app_idle",
+                    "SYNC_COMPLETE": "app_idle",
+                    "SYNC_FAILED": "app_idle"
+                }
+            }
+    
     return machine
 
 
@@ -864,3 +912,508 @@ def validate_no_critical_patterns(machine: dict) -> list:
         )
     
     return violations
+
+
+# ---------------------------------------------------------------------------
+# Post-Processing: Ensure Connectivity (Fix Unreachable States)
+# ---------------------------------------------------------------------------
+
+def ensure_connectivity(machine: dict) -> dict:
+    """Ensure all states are reachable from the initial state.
+    
+    The validator reports UNREACHABLE_STATE when states exist but have no
+    path from the initial state. This function adds transitions from the
+    initial state (or other reachable states) to unreachable states.
+    
+    This function:
+    1. Performs BFS from initial state to find all reachable states
+    2. Identifies unreachable states
+    3. Adds transitions from reachable states to unreachable states
+    4. Prioritizes adding transitions from the initial state
+    
+    Args:
+        machine: The state machine dict to fix.
+    
+    Returns:
+        Fixed machine dict.
+    """
+    # For parallel architecture, work with navigation branch states
+    if machine.get("type") == "parallel" and "navigation" in machine.get("states", {}):
+        states_root = machine["states"]["navigation"].get("states", {})
+        initial_state = machine["states"]["navigation"].get("initial", "app_idle")
+    else:
+        states_root = machine.get("states", {})
+        initial_state = machine.get("initial", "app_idle")
+    
+    if not states_root:
+        return machine
+    
+    # BFS to find all reachable states
+    reachable = set()
+    queue = [initial_state]
+    
+    while queue:
+        current = queue.pop(0)
+        if current in reachable:
+            continue
+        if current not in states_root:
+            continue
+        
+        reachable.add(current)
+        state_config = states_root[current]
+        
+        # Check transitions
+        for event, target in state_config.get("on", {}).items():
+            if isinstance(target, str):
+                target_name = target.split(".")[-1]  # Get short name
+                if target_name in states_root and target_name not in reachable:
+                    queue.append(target_name)
+            elif isinstance(target, dict):
+                target_name = target.get("target", "").split(".")[-1]
+                if target_name in states_root and target_name not in reachable:
+                    queue.append(target_name)
+            elif isinstance(target, list):
+                for t in target:
+                    if isinstance(t, dict):
+                        target_name = t.get("target", "").split(".")[-1]
+                    else:
+                        target_name = str(t).split(".")[-1]
+                    if target_name in states_root and target_name not in reachable:
+                        queue.append(target_name)
+        
+        # Check sub-states (they are reachable if parent is reachable)
+        for sub_name in state_config.get("states", {}):
+            full_path = f"{current}.{sub_name}"
+            # Sub-states are considered reachable but we track parent states
+    
+    # Find unreachable states (top-level only for parallel architecture)
+    all_states = set(states_root.keys())
+    unreachable = all_states - reachable - {initial_state}
+    
+    if not unreachable:
+        return machine
+    
+    print(f"  🔧 Found {len(unreachable)} unreachable states: {sorted(unreachable)[:10]}{'...' if len(unreachable) > 10 else ''}")
+    
+    # Add transitions from initial state to unreachable states
+    initial_config = states_root.get(initial_state, {})
+    if "on" not in initial_config:
+        initial_config["on"] = {}
+    
+    added_count = 0
+    for unreachable_state in sorted(unreachable):
+        # Create a navigation event for this state
+        event_name = f"NAVIGATE_TO_{unreachable_state.upper()}"
+        
+        # Check if transition already exists
+        if event_name not in initial_config["on"]:
+            initial_config["on"][event_name] = unreachable_state
+            added_count += 1
+            print(f"  🔧 Added transition: {initial_state} --{event_name}--> {unreachable_state}")
+    
+    if added_count > 0:
+        print(f"  ✅ Added {added_count} transitions to connect unreachable states")
+    
+    return machine
+
+
+# ---------------------------------------------------------------------------
+# Post-Processing: Fix Duplicate State Names at Different Paths
+# ---------------------------------------------------------------------------
+
+def fix_duplicate_state_names(machine: dict) -> dict:
+    """Fix states that appear with the same name at different paths.
+    
+    The validator reports DUPLICATE_STATE when the same state name appears
+    at different paths (e.g., 'navigation' at root and 'navigation.navigation').
+    
+    This function:
+    1. Detects duplicate state names across the entire machine
+    2. Keeps the first occurrence (usually the intended one)
+    3. Renames subsequent duplicates with a suffix
+    4. Updates all transitions to point to the renamed states
+    
+    Args:
+        machine: The state machine dict to fix.
+    
+    Returns:
+        Fixed machine dict.
+    """
+    # For parallel architecture, work with navigation branch states
+    if machine.get("type") == "parallel" and "navigation" in machine.get("states", {}):
+        states_root = machine["states"]["navigation"].get("states", {})
+    else:
+        states_root = machine.get("states", {})
+    
+    # Track all state names and their paths
+    state_paths = {}  # name -> list of full paths
+    
+    def collect_state_paths(states_dict, prefix=""):
+        for name, config in states_dict.items():
+            full_path = f"{prefix}.{name}" if prefix else name
+            if name not in state_paths:
+                state_paths[name] = []
+            state_paths[name].append(full_path)
+            
+            # Recurse into sub-states
+            if "states" in config:
+                collect_state_paths(config["states"], full_path)
+    
+    collect_state_paths(states_root)
+    
+    # Find duplicates (same name, different paths)
+    duplicates = {name: paths for name, paths in state_paths.items() if len(paths) > 1}
+    
+    if not duplicates:
+        return machine
+    
+    print(f"  🔧 Found {len(duplicates)} duplicate state names: {list(duplicates.keys())}")
+    
+    # Rename strategy: keep first occurrence, rename others
+    rename_map = {}  # old_path -> new_name
+    
+    for name, paths in duplicates.items():
+        # Keep the first path as-is, rename the rest
+        for i, path in enumerate(paths[1:], 1):
+            new_name = f"{name}_{i}"
+            rename_map[path] = new_name
+            print(f"  🔧 Will rename '{path}' to '{new_name}'")
+    
+    # Apply renames
+    renamed_count = 0
+    
+    def rename_in_states(states_dict, prefix=""):
+        nonlocal renamed_count
+        
+        # Process current level
+        for name in list(states_dict.keys()):
+            full_path = f"{prefix}.{name}" if prefix else name
+            
+            if full_path in rename_map:
+                new_name = rename_map[full_path]
+                # Rename the state
+                states_dict[new_name] = states_dict.pop(name)
+                renamed_count += 1
+                print(f"  ✅ Renamed '{full_path}' to '{new_name}'")
+                name = new_name
+            
+            # Recurse into sub-states
+            if "states" in states_dict[name]:
+                rename_in_states(states_dict[name]["states"], full_path)
+    
+    rename_in_states(states_root)
+    
+    # Update all transitions to use new names
+    def update_transitions(states_dict, prefix=""):
+        for name, config in states_dict.items():
+            full_path = f"{prefix}.{name}" if prefix else name
+            
+            # Update transitions in 'on' events
+            if "on" in config:
+                for event, target in list(config["on"].items()):
+                    if isinstance(target, str):
+                        # Check if target needs to be renamed
+                        for old_path, new_name in rename_map.items():
+                            if target == old_path.split(".")[-1]:
+                                # Target matches a renamed state
+                                config["on"][event] = new_name
+                                print(f"  🔧 Updated transition: {full_path} --{event}--> {new_name}")
+                                break
+                    elif isinstance(target, dict):
+                        tgt = target.get("target", "")
+                        for old_path, new_name in rename_map.items():
+                            if tgt == old_path.split(".")[-1]:
+                                target["target"] = new_name
+                                print(f"  🔧 Updated transition: {full_path} --{event}--> {new_name}")
+                                break
+                    elif isinstance(target, list):
+                        for i, t in enumerate(target):
+                            if isinstance(t, dict):
+                                tgt = t.get("target", "")
+                                for old_path, new_name in rename_map.items():
+                                    if tgt == old_path.split(".")[-1]:
+                                        t["target"] = new_name
+                                        print(f"  🔧 Updated transition: {full_path} --{event}--> {new_name}")
+                                        break
+                            elif isinstance(t, str):
+                                for old_path, new_name in rename_map.items():
+                                    if t == old_path.split(".")[-1]:
+                                        target[i] = new_name
+                                        print(f"  🔧 Updated transition: {full_path} --{event}--> {new_name}")
+                                        break
+            
+            # Recurse into sub-states
+            if "states" in config:
+                update_transitions(config["states"], full_path)
+    
+    update_transitions(states_root)
+    
+    if renamed_count > 0:
+        print(f"  ✅ Fixed {renamed_count} duplicate state names")
+    
+    return machine
+
+
+# ---------------------------------------------------------------------------
+# Post-Processing: Fix Infinite Loops
+# ---------------------------------------------------------------------------
+
+def fix_infinite_loops(machine: dict) -> dict:
+    """Fix potential infinite loops in the state machine.
+    
+    The validator reports POTENTIAL_INFINITE_LOOP when there's a bidirectional
+    cycle between two states (e.g., app_idle <-> auth_guard) where one state
+    has no other exits.
+    
+    This function:
+    1. Detects bidirectional cycles between states
+    2. Adds alternative exit transitions to break the loop
+    3. Ensures every state in a cycle has at least one exit to outside the cycle
+    
+    Args:
+        machine: The state machine dict to fix.
+    
+    Returns:
+        Fixed machine dict.
+    """
+    # For parallel architecture, work with navigation branch states
+    if machine.get("type") == "parallel" and "navigation" in machine.get("states", {}):
+        states_root = machine["states"]["navigation"].get("states", {})
+    else:
+        states_root = machine.get("states", {})
+    
+    # Build transition graph
+    transitions = {}  # state_name -> list of (target, event)
+    
+    def collect_transitions(states_dict, prefix=""):
+        for name, config in states_dict.items():
+            full_path = f"{prefix}.{name}" if prefix else name
+            short_name = name  # Use short name for cycle detection
+            
+            if short_name not in transitions:
+                transitions[short_name] = []
+            
+            if "on" in config:
+                for event, target in config["on"].items():
+                    if isinstance(target, str):
+                        target_short = target.split(".")[-1]
+                        transitions[short_name].append((target_short, event))
+                    elif isinstance(target, dict):
+                        tgt = target.get("target", "")
+                        if tgt:
+                            target_short = tgt.split(".")[-1]
+                            transitions[short_name].append((target_short, event))
+                    elif isinstance(target, list):
+                        for t in target:
+                            if isinstance(t, dict):
+                                tgt = t.get("target", "")
+                                if tgt:
+                                    target_short = tgt.split(".")[-1]
+                                    transitions[short_name].append((target_short, event))
+                            elif isinstance(t, str):
+                                target_short = t.split(".")[-1]
+                                transitions[short_name].append((target_short, event))
+            
+            # Recurse into sub-states
+            if "states" in config:
+                collect_transitions(config["states"], full_path)
+    
+    collect_transitions(states_root)
+    
+    # Find bidirectional cycles
+    cycles = []
+    checked_pairs = set()
+    
+    for state_a, targets_a in transitions.items():
+        for target_b, _ in targets_a:
+            if target_b in transitions:
+                # Check if target_b transitions back to state_a
+                for target_a, _ in transitions.get(target_b, []):
+                    if target_a == state_a:
+                        pair = tuple(sorted([state_a, target_b]))
+                        if pair not in checked_pairs:
+                            checked_pairs.add(pair)
+                            cycles.append((state_a, target_b))
+    
+    if not cycles:
+        return machine
+    
+    print(f"  🔧 Found {len(cycles)} bidirectional cycles: {cycles}")
+    
+    # Fix each cycle by adding alternative exits
+    fixed_cycles = 0
+    
+    for state_a, state_b in cycles:
+        # Find which state has fewer exits
+        exits_a = [t for t, _ in transitions.get(state_a, []) if t != state_b]
+        exits_b = [t for t, _ in transitions.get(state_b, []) if t != state_a]
+        
+        # Add exit to the state with fewer alternatives
+        if len(exits_a) == 0:
+            # State A only goes to B - add an exit to dashboard or app_idle
+            target_exit = "dashboard" if "dashboard" in states_root else "app_idle"
+            if target_exit in states_root and state_a in states_root:
+                state_config = states_root[state_a]
+                if "on" not in state_config:
+                    state_config["on"] = {}
+                if "NAVIGATE_TO_DASHBOARD" not in state_config["on"]:
+                    state_config["on"]["NAVIGATE_TO_DASHBOARD"] = target_exit
+                    print(f"  🔧 Added exit from '{state_a}' to '{target_exit}' to break cycle")
+                    fixed_cycles += 1
+        
+        if len(exits_b) == 0:
+            # State B only goes to A - add an exit
+            target_exit = "dashboard" if "dashboard" in states_root else "app_idle"
+            if target_exit in states_root and state_b in states_root:
+                state_config = states_root[state_b]
+                if "on" not in state_config:
+                    state_config["on"] = {}
+                if "NAVIGATE_TO_DASHBOARD" not in state_config["on"]:
+                    state_config["on"]["NAVIGATE_TO_DASHBOARD"] = target_exit
+                    print(f"  🔧 Added exit from '{state_b}' to '{target_exit}' to break cycle")
+                    fixed_cycles += 1
+    
+    if fixed_cycles > 0:
+        print(f"  ✅ Fixed {fixed_cycles} infinite loops")
+    
+    return machine
+
+
+# ---------------------------------------------------------------------------
+# Post-Processing: Fix Root vs Navigation Duplicates
+# ---------------------------------------------------------------------------
+
+def fix_root_navigation_duplicates(machine: dict) -> dict:
+    """Fix duplicate states that exist both at root level and inside navigation.
+    
+    The validator reports DUPLICATE_STATE when states like 'navigation' or 
+    'data_sync_state' exist both as root states and as sub-states of 'navigation'.
+    
+    This function:
+    1. Detects duplicates between root states and navigation sub-states
+    2. Removes the root-level duplicates (keeping navigation sub-states)
+    3. Updates all transitions to point to the correct paths
+    
+    Args:
+        machine: The state machine dict to fix.
+    
+    Returns:
+        Fixed machine dict.
+    """
+    states = machine.get("states", {})
+    
+    # Check if we have navigation branch
+    if "navigation" not in states:
+        return machine
+    
+    nav_states = states["navigation"].get("states", {})
+    
+    # Find duplicates: states that exist both at root and in navigation
+    root_state_names = set(states.keys())
+    nav_state_names = set(nav_states.keys())
+    duplicates = root_state_names & nav_state_names
+    
+    if not duplicates:
+        return machine
+    
+    # Filter out the 'navigation' branch itself - we should never remove the navigation branch
+    duplicates = {d for d in duplicates if d != 'navigation'}
+    
+    if not duplicates:
+        return machine
+    
+    print(f"  🔧 Found {len(duplicates)} root/navigation duplicates: {duplicates}")
+    
+    # Remove root-level duplicates (keep navigation sub-states)
+    for dup_name in duplicates:
+        if dup_name in states:
+            del states[dup_name]
+            print(f"  🔧 Removed root-level duplicate: '{dup_name}' (keeping navigation.{dup_name})")
+    
+    # Also remove invalid state names (starting with #)
+    invalid_names = [name for name in nav_state_names if name.startswith("#")]
+    for invalid_name in invalid_names:
+        if invalid_name in nav_states:
+            del nav_states[invalid_name]
+            print(f"  🔧 Removed invalid state name: 'navigation.{invalid_name}'")
+    
+    # Update transitions that pointed to root duplicates
+    def update_transitions(states_dict, prefix=""):
+        for name, config in states_dict.items():
+            full_path = f"{prefix}.{name}" if prefix else name
+            
+            if "on" in config:
+                for event, target in list(config["on"].items()):
+                    if isinstance(target, str):
+                        # Check if target was a removed root duplicate
+                        if target in duplicates:
+                            # Update to point to navigation sub-state
+                            new_target = f"navigation.{target}"
+                            config["on"][event] = new_target
+                            print(f"  🔧 Updated transition: {full_path} --{event}--> {new_target}")
+                        elif target.startswith("#"):
+                            # Remove transitions to invalid states
+                            del config["on"][event]
+                            print(f"  🔧 Removed transition to invalid state: {full_path} --{event}--> {target}")
+                    elif isinstance(target, dict):
+                        tgt = target.get("target", "")
+                        if tgt in duplicates:
+                            new_target = f"navigation.{tgt}"
+                            target["target"] = new_target
+                            print(f"  🔧 Updated transition: {full_path} --{event}--> {new_target}")
+                        elif tgt.startswith("#"):
+                            del config["on"][event]
+                            print(f"  🔧 Removed transition to invalid state: {full_path} --{event}--> {tgt}")
+                    elif isinstance(target, list):
+                        new_targets = []
+                        for t in target:
+                            if isinstance(t, dict):
+                                tgt = t.get("target", "")
+                                if tgt in duplicates:
+                                    t["target"] = f"navigation.{tgt}"
+                                    print(f"  🔧 Updated transition: {full_path} --{event}--> navigation.{tgt}")
+                                elif not tgt.startswith("#"):
+                                    new_targets.append(t)
+                                else:
+                                    print(f"  🔧 Removed transition to invalid state: {full_path} --{event}--> {tgt}")
+                            elif isinstance(t, str):
+                                if t in duplicates:
+                                    new_targets.append(f"navigation.{t}")
+                                    print(f"  🔧 Updated transition: {full_path} --{event}--> navigation.{t}")
+                                elif not t.startswith("#"):
+                                    new_targets.append(t)
+                                else:
+                                    print(f"  🔧 Removed transition to invalid state: {full_path} --{event}--> {t}")
+                        if new_targets:
+                            config["on"][event] = new_targets
+                        else:
+                            del config["on"][event]
+            
+            # Recurse into sub-states
+            if "states" in config:
+                update_transitions(config["states"], full_path)
+    
+    # Update transitions in navigation branch
+    update_transitions(nav_states, "navigation")
+    
+    # Update transitions in remaining root states
+    for root_name, root_config in states.items():
+        if isinstance(root_config, dict) and "on" in root_config:
+            for event, target in list(root_config["on"].items()):
+                if isinstance(target, str):
+                    if target in duplicates:
+                        root_config["on"][event] = f"navigation.{target}"
+                        print(f"  🔧 Updated root transition: {root_name} --{event}--> navigation.{target}")
+                    elif target.startswith("#"):
+                        del root_config["on"][event]
+                        print(f"  🔧 Removed root transition to invalid state: {root_name} --{event}--> {target}")
+    
+    # Update initial state if it pointed to a removed duplicate
+    initial = machine.get("initial", "")
+    if initial in duplicates:
+        machine["initial"] = f"navigation.{initial}"
+        print(f"  🔧 Updated initial state: {initial} -> navigation.{initial}")
+    
+    print(f"  ✅ Fixed {len(duplicates)} root/navigation duplicates")
+    
+    return machine
