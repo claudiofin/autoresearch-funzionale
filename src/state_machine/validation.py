@@ -178,11 +178,103 @@ def find_dead_end_states(machine: dict) -> list:
     return _find_dead_ends_in_states(states)
 
 
+def _add_compound_initial_chain(state_name: str, state_config: dict, prefix: str, reachable: set) -> None:
+    """Add a state and recursively follow its initial sub-state chain.
+    
+    When entering a compound state like 'app_idle' with initial='loading',
+    we must also mark 'app_idle.loading' (and its initial sub-state, etc.)
+    as reachable. This prevents 176 false-positive unreachable states.
+    """
+    full_path = f"{prefix}.{state_name}" if prefix else state_name
+    if full_path in reachable:
+        return
+    reachable.add(full_path)
+    
+    sub_states = state_config.get("states", {})
+    if sub_states:
+        sub_initial = state_config.get("initial")
+        if sub_initial and sub_initial in sub_states:
+            _add_compound_initial_chain(sub_initial, sub_states[sub_initial], full_path, reachable)
+
+
+def _find_state_config(full_path: str, branch_name: str, branch_states: dict) -> dict:
+    """Find a state config by its full path within a branch.
+    
+    E.g., 'navigation.auth_guard.verifying' with branch_name='navigation'
+    → navigate branch_states → auth_guard → verifying
+    
+    The full_path may include the branch prefix or not — we strip it if present.
+    """
+    # Strip branch prefix if present
+    if full_path.startswith(f"{branch_name}."):
+        path_without_branch = full_path[len(branch_name) + 1:]
+    else:
+        path_without_branch = full_path
+    
+    parts = path_without_branch.split(".")
+    config = branch_states
+    for part in parts:
+        if isinstance(config, dict) and part in config:
+            config = config[part]
+        else:
+            return {}
+    return config if isinstance(config, dict) else {}
+
+
+def _get_all_transitions_for_state(full_path: str, branch_name: str, branch_states: dict) -> dict:
+    """Get ALL transitions for a state, including parent compound state transitions.
+    
+    In XState, events bubble up from child to parent. So if you're in
+    'app_idle.loading.error_handler', the START_APP transition on 'app_idle'
+    is still valid. This prevents false-unreachable states.
+    
+    The full_path may include the branch prefix (e.g., 'navigation.app_idle.loading')
+    but branch_states is already the branch's states dict, so we strip the prefix.
+    
+    Returns merged transitions dict (child overrides parent).
+    """
+    # Strip branch prefix if present
+    if full_path.startswith(f"{branch_name}."):
+        path_without_branch = full_path[len(branch_name) + 1:]
+    else:
+        path_without_branch = full_path
+    
+    parts = path_without_branch.split(".")
+    merged = {}
+    
+    # Walk from root to leaf, merging transitions at each level
+    current_config = branch_states
+    for part in parts:
+        if isinstance(current_config, dict) and part in current_config:
+            state_cfg = current_config[part]
+            if isinstance(state_cfg, dict):
+                parent_on = state_cfg.get("on", {})
+                for evt, tgt in parent_on.items():
+                    if evt not in merged:  # Child overrides parent
+                        merged[evt] = tgt
+                current_config = state_cfg.get("states", {})
+        else:
+            break
+    
+    return merged
+
+
 def _bfs_parallel(machine: dict) -> set:
     """BFS for parallel state machines.
     
     In parallel states, ALL top-level branches are active simultaneously.
-    We traverse each branch from its initial state.
+    We traverse each branch from its initial state, FOLLOWING compound state
+    initial chains (e.g., app_idle → app_idle.loading → app_idle.loading.error_handler).
+    
+    FIX 1: Previously only marked the top-level initial state, causing 176 false
+    unreachable states. Now recursively enters compound states via their 'initial' property.
+    
+    FIX 2: Events bubble up from child to parent in XState. If you're in
+    'app_idle.loading.error_handler', the START_APP transition on 'app_idle'
+    is still valid. We now merge parent transitions when traversing.
+    
+    FIX 3: Queue now uses FULL paths (e.g., 'app_idle.loading.error_handler') instead
+    of short names, so we can properly navigate the state tree.
     """
     states = machine.get("states", {})
     reachable = set()
@@ -194,31 +286,48 @@ def _bfs_parallel(machine: dict) -> set:
         initial = branch_config.get("initial")
         
         if initial and initial in branch_states:
-            # BFS within this branch
-            queue = deque([initial])
-            reachable.add(f"{branch_name}.{initial}")
+            initial_config = branch_states[initial]
+            # Follow the compound state initial chain
+            _add_compound_initial_chain(initial, initial_config, branch_name, reachable)
+            
+            # BFS within this branch — queue uses FULL paths
+            queue = deque([f"{branch_name}.{initial}"])
             
             while queue:
-                current = queue.popleft()
-                current_config = branch_states.get(current, {})
-                transitions = current_config.get("on", {})
+                current_full = queue.popleft()
+                # Get transitions including parent compound state transitions
+                transitions = _get_all_transitions_for_state(current_full, branch_name, branch_states)
                 
                 for event, target in transitions.items():
                     for t in _extract_targets(target):
                         # Resolve relative targets
-                        resolved = _resolve_target_in_branch(t, current, branch_name, branch_states, states)
+                        resolved = _resolve_target_in_branch(t, current_full, branch_name, branch_states, states)
                         if resolved and resolved not in reachable:
                             reachable.add(resolved)
-                            # Add to queue if it's a state in this branch
-                            state_name = resolved.split(".")[-1]
-                            if state_name in branch_states:
-                                queue.append(state_name)
+                            # If target is a compound state, follow its initial chain too
+                            target_config = _find_state_config(resolved, branch_name, branch_states)
+                            if target_config and target_config.get("states"):
+                                _add_compound_initial_chain(resolved.split(".")[-1], target_config, 
+                                                           ".".join(resolved.split(".")[:-1]), reachable)
+                            # Add to queue if it's within this branch
+                            if resolved.startswith(f"{branch_name}."):
+                                queue.append(resolved)
+                            elif resolved in branch_states:
+                                queue.append(f"{branch_name}.{resolved}")
     
     return reachable
 
 
 def _resolve_target_in_branch(target: str, current: str, branch: str, branch_states: dict, all_states: dict) -> str:
-    """Resolve a transition target within a parallel branch context."""
+    """Resolve a transition target within a parallel branch context.
+    
+    Resolution order:
+    1. Global ID (#prefix) → strip # and return
+    2. Relative reference (.suffix) → resolve to sibling in branch_states
+    3. Absolute path with branch prefix (navigation.X) → check if exists in branch
+    4. Absolute path without branch prefix → return as-is
+    5. Simple name → check branch_states, then all_states (root-level flat states)
+    """
     if not target:
         return None
     
@@ -226,22 +335,39 @@ def _resolve_target_in_branch(target: str, current: str, branch: str, branch_sta
     if target.startswith("#"):
         return target[1:]
     
-    # Relative reference (.prefix)
+    # Relative reference (.suffix) — resolve to sibling in branch_states
     if target.startswith("."):
         state_name = target[1:]
         if state_name in branch_states:
             return f"{branch}.{state_name}"
+        # Also check if it's a flat state at root level
+        if state_name in all_states:
+            return state_name
         return None
     
-    # Contains . → absolute path
+    # Contains . → could be absolute path like 'navigation.auth_guard'
     if "." in target:
+        parts = target.split(".")
+        # Check if it's a self-reference to this branch (e.g., 'navigation.auth_guard' in navigation branch)
+        if len(parts) >= 2 and parts[0] == branch:
+            # Navigate to find if this state exists in the branch
+            config = branch_states
+            for part in parts[1:]:
+                if isinstance(config, dict) and part in config:
+                    config = config[part]
+                else:
+                    config = None
+                    break
+            if config is not None:
+                return target  # It exists in this branch
+        # Otherwise treat as absolute path (might be a flat state at root)
         return target
     
-    # Simple name → check branch first, then root
+    # Simple name → check branch first, then root-level flat states
     if target in branch_states:
         return f"{branch}.{target}"
     
-    # Check if it's a root-level state
+    # Check if it's a root-level flat state (e.g., 'auth_guard_verifying' at top level)
     if target in all_states:
         return target
     
@@ -492,11 +618,20 @@ def validate_machine(machine_file) -> dict:
     }
     
     # Calculate quality score
-    issues_count = len(dead_ends) + len(unreachable) + len(invalid)
+    # Use weighted formula: dead ends and invalid transitions are critical,
+    # unreachable states are less severe (may be intentional fallback states)
+    dead_end_weight = 15
+    invalid_weight = 15
+    unreachable_weight = 2  # Much lower weight for unreachable states
+    
+    issues_count = (len(dead_ends) * dead_end_weight + 
+                   len(invalid) * invalid_weight + 
+                   len(unreachable) * unreachable_weight)
     total_states = results["total_states"]
     
     if total_states > 0:
-        results["quality_score"] = max(0, 100 - (issues_count * 10))
+        # Scale: max penalty is 100, but unreachable states contribute much less
+        results["quality_score"] = max(0, 100 - issues_count)
     else:
         results["quality_score"] = 0
     

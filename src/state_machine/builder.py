@@ -48,6 +48,11 @@ from state_machine.cleanup import (
     remove_empty_states_dict, fix_relative_transitions,
     fix_start_app_transitions, connect_unreachable_states,
     fix_initial_state, connect_sibling_substates,
+    enforce_compound_states, inject_auth_flow, apply_error_routing_matrix,
+    fix_authenticating_targets, fix_bare_app_idle_targets,
+    fix_relative_substate_targets, remove_duplicate_states,
+    fix_invalid_compound_states, connect_orphan_workflows,
+    add_pull_to_refresh_states, add_offline_mode,
 )
 from state_machine.target_resolution import (
     apply_target_resolution, apply_target_crosscheck,
@@ -450,6 +455,43 @@ def compile_machine(machine: dict, max_iterations: int = 1) -> dict:
         
         machine = connect_sibling_substates(machine)  # FIX: connect loading↔ready↔error within compounds
         print(f"  🔍 [DEBUG] after connect_sibling_substates: {_count_states(machine)} states")
+        
+        # === FIX 10-12: Structural quality improvements ===
+        machine = enforce_compound_states(machine)  # FIX 10: Convert flat screens to compound states
+        print(f"  🔍 [DEBUG] after enforce_compound_states: {_count_states(machine)} states")
+        
+        machine = inject_auth_flow(machine)  # FIX 11: Inject auth_guard/login/session_expired
+        print(f"  🔍 [DEBUG] after inject_auth_flow: {_count_states(machine)} states")
+        
+        machine = apply_error_routing_matrix(machine)  # FIX 12: Local errors stay local, fatal errors bubble
+        print(f"  🔍 [DEBUG] after apply_error_routing_matrix: {_count_states(machine)} states")
+        
+        # === FIX 13-14: Fix invalid transition targets ===
+        machine = fix_authenticating_targets(machine)  # FIX 13: 'authenticating' → 'auth_guard'
+        print(f"  🔍 [DEBUG] after fix_authenticating_targets: {_count_states(machine)} states")
+        
+        machine = fix_bare_app_idle_targets(machine)  # FIX 14: bare 'app_idle' → 'navigation.app_idle'
+        print(f"  🔍 [DEBUG] after fix_bare_app_idle_targets: {_count_states(machine)} states")
+        
+        # === FIX 15-16: Fix relative targets and duplicates ===
+        machine = fix_relative_substate_targets(machine)  # FIX 15: 'ready' → '.ready' in compounds
+        print(f"  🔍 [DEBUG] after fix_relative_substate_targets: {_count_states(machine)} states")
+        
+        machine = remove_duplicate_states(machine)  # FIX 16: remove phantom duplicates
+        print(f"  🔍 [DEBUG] after remove_duplicate_states: {_count_states(machine)} states")
+        
+        # === FIX 17-20: Structural quality improvements ===
+        machine = fix_invalid_compound_states(machine)  # FIX 17: fix missing/invalid 'initial'
+        print(f"  🔍 [DEBUG] after fix_invalid_compound_states: {_count_states(machine)} states")
+        
+        machine = connect_orphan_workflows(machine)  # FIX 18: connect unreachable workflows
+        print(f"  🔍 [DEBUG] after connect_orphan_workflows: {_count_states(machine)} states")
+        
+        machine = add_pull_to_refresh_states(machine)  # FIX 19: pull-to-refresh micro-states
+        print(f"  🔍 [DEBUG] after add_pull_to_refresh_states: {_count_states(machine)} states")
+        
+        machine = add_offline_mode(machine)  # FIX 20: offline mode support
+        print(f"  🔍 [DEBUG] after add_offline_mode: {_count_states(machine)} states")
         
         try:
             after = json.dumps(machine, sort_keys=True, default=str)
