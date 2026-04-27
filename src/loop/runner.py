@@ -8,6 +8,7 @@ Three independent runners:
 """
 
 import os
+import sys
 import json
 import subprocess
 from typing import Optional
@@ -100,6 +101,7 @@ class FrontendRunner:
         try:
             env = os.environ.copy()
             env["PYTHONPATH"] = SRC_DIR
+            env["PYTHONUNBUFFERED"] = "1"
             result = subprocess.run(
                 ["python3", "-m", f"pipeline.frontend.{module_name}"] + args,
                 capture_output=True,
@@ -113,10 +115,12 @@ class FrontendRunner:
                 for line in result.stdout.strip().split("\n"):
                     if line.strip():
                         print(f"  {line}")
+                sys.stdout.flush()
             if result.stderr:
                 for line in result.stderr.strip().split("\n"):
                     if line.strip():
                         print(f"  [stderr] {line}")
+                sys.stdout.flush()
             
             return {"returncode": result.returncode, "stdout": result.stdout}
             
@@ -477,6 +481,7 @@ class BackendRunner:
         try:
             env = os.environ.copy()
             env["PYTHONPATH"] = SRC_DIR
+            env["PYTHONUNBUFFERED"] = "1"
             result = subprocess.run(
                 ["python3", "-m", f"pipeline.backend.{module_name}"] + args,
                 capture_output=True,
@@ -490,10 +495,12 @@ class BackendRunner:
                 for line in result.stdout.strip().split("\n"):
                     if line.strip():
                         print(f"  {line}")
+                sys.stdout.flush()
             if result.stderr:
                 for line in result.stderr.strip().split("\n"):
                     if line.strip():
                         print(f"  [stderr] {line}")
+                sys.stdout.flush()
             
             return {"returncode": result.returncode, "stdout": result.stdout}
             
@@ -562,6 +569,7 @@ class CICDRunner:
         try:
             env = os.environ.copy()
             env["PYTHONPATH"] = SRC_DIR
+            env["PYTHONUNBUFFERED"] = "1"
             result = subprocess.run(
                 ["python3", "-m", f"pipeline.ci_cd.{module_name}"] + args,
                 capture_output=True,
@@ -575,10 +583,12 @@ class CICDRunner:
                 for line in result.stdout.strip().split("\n"):
                     if line.strip():
                         print(f"  {line}")
+                sys.stdout.flush()
             if result.stderr:
                 for line in result.stderr.strip().split("\n"):
                     if line.strip():
                         print(f"  [stderr] {line}")
+                sys.stdout.flush()
             
             return {"returncode": result.returncode, "stdout": result.stdout}
             

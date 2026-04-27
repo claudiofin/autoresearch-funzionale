@@ -178,23 +178,97 @@ def find_dead_end_states(machine: dict) -> list:
     return _find_dead_ends_in_states(states)
 
 
-def _add_compound_initial_chain(state_name: str, state_config: dict, prefix: str, reachable: set) -> None:
+def _find_flat_substate_initial(full_path: str, all_paths: set) -> str:
+    """Find the initial sub-state of a flat-path state.
+    
+    Since sub-states may be defined as flat paths (e.g., 'navigation.auth_guard.verifying.validating')
+    rather than nested, we need to find them by checking which paths start with full_path + '.'
+    and match the 'initial' pattern.
+    
+    We use a heuristic: look for paths that are direct children of full_path
+    (i.e., have exactly one more path component).
+    """
+    prefix = f"{full_path}."
+    children = [p for p in all_paths if p.startswith(prefix) and p.count(".") == full_path.count(".") + 1]
+    if children:
+        # Return the first child (alphabetically, which often matches 'initial' naming)
+        # Common initial sub-state names: loading, validating, error_handler, ready
+        for name in ["loading", "validating", "error_handler", "ready", "initializing", "checking_auth",
+                      "verifying", "authenticating", "creating", "syncing", "connected", "routing"]:
+            candidate = f"{full_path}.{name}"
+            if candidate in children:
+                return candidate
+        return children[0]
+    return None
+
+
+def _add_compound_initial_chain(state_name: str, state_config: dict, prefix: str, reachable: set, queue_list: list = None, all_paths: set = None) -> None:
     """Add a state and recursively follow its initial sub-state chain.
     
     When entering a compound state like 'app_idle' with initial='loading',
     we must also mark 'app_idle.loading' (and its initial sub-state, etc.)
     as reachable. This prevents 176 false-positive unreachable states.
+    
+    If queue_list is provided, also append each chain state to it for BFS processing.
+    
+    If all_paths is provided, also check for flat-path sub-states (states defined
+    as 'navigation.auth_guard.verifying.validating' rather than nested).
     """
     full_path = f"{prefix}.{state_name}" if prefix else state_name
     if full_path in reachable:
         return
     reachable.add(full_path)
+    if queue_list is not None:
+        queue_list.append(full_path)
     
     sub_states = state_config.get("states", {})
-    if sub_states:
-        sub_initial = state_config.get("initial")
-        if sub_initial and sub_initial in sub_states:
-            _add_compound_initial_chain(sub_initial, sub_states[sub_initial], full_path, reachable)
+    sub_initial = state_config.get("initial")
+    
+    if sub_initial:
+        # First try nested sub-state
+        if sub_initial in sub_states:
+            _add_compound_initial_chain(sub_initial, sub_states[sub_initial], full_path, reachable, queue_list, all_paths)
+        # Fallback: check if sub-state exists as a flat path
+        elif all_paths is not None:
+            candidate = f"{full_path}.{sub_initial}"
+            if candidate in all_paths and candidate not in reachable:
+                if queue_list is not None:
+                    queue_list.append(candidate)
+                # Recursively follow its initial chain using flat-path lookup
+                _follow_flat_initial_chain(candidate, all_paths, reachable, queue_list)
+
+
+def _follow_flat_initial_chain(full_path: str, all_paths: set, reachable: set, queue_list: list = None) -> None:
+    """Follow the initial sub-state chain for flat-path states.
+    
+    For states defined as flat paths, we find sub-states by checking which
+    paths in all_paths are direct children of the current path.
+    """
+    if full_path in reachable:
+        return
+    reachable.add(full_path)
+    if queue_list is not None:
+        queue_list.append(full_path)
+    
+    # Find direct children of this state
+    prefix = f"{full_path}."
+    depth = full_path.count(".")
+    children = [p for p in all_paths if p.startswith(prefix) and p.count(".") == depth + 1]
+    
+    if children:
+        # Try to find the initial sub-state by common naming patterns
+        initial_name = None
+        for name in ["loading", "validating", "error_handler", "ready", "initializing", "checking_auth",
+                      "verifying", "authenticating", "creating", "syncing", "connected", "routing"]:
+            candidate = f"{full_path}.{name}"
+            if candidate in children:
+                initial_name = name
+                break
+        
+        if initial_name:
+            child_path = f"{full_path}.{initial_name}"
+            if child_path not in reachable:
+                _follow_flat_initial_chain(child_path, all_paths, reachable, queue_list)
 
 
 def _find_state_config(full_path: str, branch_name: str, branch_states: dict) -> dict:
@@ -275,8 +349,12 @@ def _bfs_parallel(machine: dict) -> set:
     
     FIX 3: Queue now uses FULL paths (e.g., 'app_idle.loading.error_handler') instead
     of short names, so we can properly navigate the state tree.
+    
+    FIX 4: Handles flat-path sub-states (states defined as 'navigation.auth_guard.verifying.validating'
+    rather than nested under their parent).
     """
     states = machine.get("states", {})
+    all_paths = set(_collect_all_states_recursive(states).keys())
     reachable = set()
     
     for branch_name, branch_config in states.items():
@@ -287,11 +365,10 @@ def _bfs_parallel(machine: dict) -> set:
         
         if initial and initial in branch_states:
             initial_config = branch_states[initial]
-            # Follow the compound state initial chain
-            _add_compound_initial_chain(initial, initial_config, branch_name, reachable)
-            
             # BFS within this branch — queue uses FULL paths
-            queue = deque([f"{branch_name}.{initial}"])
+            queue = deque()
+            # Follow the compound state initial chain AND add all chain states to queue
+            _add_compound_initial_chain(initial, initial_config, branch_name, reachable, queue, all_paths)
             
             while queue:
                 current_full = queue.popleft()
@@ -303,19 +380,39 @@ def _bfs_parallel(machine: dict) -> set:
                         # Resolve relative targets
                         resolved = _resolve_target_in_branch(t, current_full, branch_name, branch_states, states)
                         if resolved and resolved not in reachable:
-                            reachable.add(resolved)
-                            # If target is a compound state, follow its initial chain too
+                            # If target is a compound state, follow its initial chain FIRST
+                            # (before adding to reachable, so _add_compound_initial_chain doesn't early-return)
                             target_config = _find_state_config(resolved, branch_name, branch_states)
-                            if target_config and target_config.get("states"):
+                            if target_config:
                                 _add_compound_initial_chain(resolved.split(".")[-1], target_config, 
-                                                           ".".join(resolved.split(".")[:-1]), reachable)
-                            # Add to queue if it's within this branch
-                            if resolved.startswith(f"{branch_name}."):
-                                queue.append(resolved)
-                            elif resolved in branch_states:
-                                queue.append(f"{branch_name}.{resolved}")
+                                                           ".".join(resolved.split(".")[:-1]), reachable, queue, all_paths)
+                            else:
+                                # Not a compound state — just add it directly
+                                reachable.add(resolved)
+                                if resolved.startswith(f"{branch_name}."):
+                                    queue.append(resolved)
+                                elif resolved in branch_states:
+                                    queue.append(f"{branch_name}.{resolved}")
     
     return reachable
+
+
+def _navigate_to_state(config: dict, path_parts: list) -> dict:
+    """Navigate the state tree, handling parallel branch structure.
+    
+    For parallel branches like 'navigation', the structure is:
+    {"navigation": {"type": "parallel", "states": {"app_idle": {...}, ...}}}
+    
+    So after entering 'navigation', we need to go into config["states"].
+    """
+    for part in path_parts:
+        if isinstance(config, dict) and part in config:
+            config = config[part]
+        elif isinstance(config, dict) and "states" in config and part in config["states"]:
+            config = config["states"][part]
+        else:
+            return None
+    return config
 
 
 def _resolve_target_in_branch(target: str, current: str, branch: str, branch_states: dict, all_states: dict) -> str:
@@ -323,10 +420,10 @@ def _resolve_target_in_branch(target: str, current: str, branch: str, branch_sta
     
     Resolution order:
     1. Global ID (#prefix) → strip # and return
-    2. Relative reference (.suffix) → resolve to sibling in branch_states
+    2. Relative reference (.suffix) → resolve to sibling in parent compound state
     3. Absolute path with branch prefix (navigation.X) → check if exists in branch
     4. Absolute path without branch prefix → return as-is
-    5. Simple name → check branch_states, then all_states (root-level flat states)
+    5. Simple name → check branch_states, then sibling in parent, then all_states
     """
     if not target:
         return None
@@ -335,14 +432,30 @@ def _resolve_target_in_branch(target: str, current: str, branch: str, branch_sta
     if target.startswith("#"):
         return target[1:]
     
-    # Relative reference (.suffix) — resolve to sibling in branch_states
+    # Relative reference (.suffix) — resolve to sibling in parent compound state
     if target.startswith("."):
-        state_name = target[1:]
-        if state_name in branch_states:
-            return f"{branch}.{state_name}"
-        # Also check if it's a flat state at root level
-        if state_name in all_states:
-            return state_name
+        suffix = target[1:]
+        if not suffix:
+            return None
+        
+        # Parse current path to find parent levels
+        parts = current.split(".")
+        
+        # Try each level of the path as a potential parent
+        for i in range(len(parts) - 1, 0, -1):
+            parent_path = ".".join(parts[:i])
+            # Navigate to the parent using the parallel-aware navigator
+            path_parts = parent_path.split(".")
+            config = _navigate_to_state(all_states, path_parts)
+            
+            if config is None:
+                continue
+            
+            # Check if suffix is a sibling in this parent's states
+            parent_states = config.get("states", {})
+            if suffix in parent_states:
+                return f"{parent_path}.{suffix}"
+        
         return None
     
     # Contains . → could be absolute path like 'navigation.auth_guard'
@@ -363,11 +476,23 @@ def _resolve_target_in_branch(target: str, current: str, branch: str, branch_sta
         # Otherwise treat as absolute path (might be a flat state at root)
         return target
     
-    # Simple name → check branch first, then root-level flat states
+    # Simple name → check branch first
     if target in branch_states:
         return f"{branch}.{target}"
     
-    # Check if it's a root-level flat state (e.g., 'auth_guard_verifying' at top level)
+    # Check if it's a sibling in the parent compound state
+    # E.g., from 'navigation.app_idle.loading', 'ready' → 'navigation.app_idle.ready'
+    parts = current.split(".")
+    for i in range(len(parts) - 1, 0, -1):
+        parent_path = ".".join(parts[:i])
+        candidate = f"{parent_path}.{target}"
+        # Check if this candidate exists using the parallel-aware navigator
+        check_parts = candidate.split(".")
+        check_config = _navigate_to_state(all_states, check_parts)
+        if check_config is not None:
+            return candidate
+    
+    # Check if it's a root-level flat state
     if target in all_states:
         return target
     
@@ -473,6 +598,56 @@ def find_unreachable_states(machine: dict) -> list:
     return unreachable
 
 
+def _resolve_relative_target(target: str, current_full_path: str, states: dict, all_state_paths: set) -> bool:
+    """Resolve an XState relative target (.suffix) to check if it's valid.
+    
+    In XState, '.ready' means 'the sibling state named ready in the same parent compound state'.
+    E.g., from 'navigation.app_idle.loading', '.ready' resolves to 'navigation.app_idle.ready'.
+    
+    We use all_state_paths to check if the candidate path exists — no tree navigation needed.
+    """
+    if not target.startswith("."):
+        return False
+    
+    suffix = target[1:]
+    if not suffix:
+        return False
+    
+    # Parse the current path to find parent levels
+    parts = current_full_path.split(".")
+    
+    # Try each ancestor as a potential parent
+    # E.g., from 'navigation.app_idle.loading.error_handler', try:
+    #   - navigation.app_idle.loading.ready
+    #   - navigation.app_idle.ready
+    #   - navigation.ready
+    for i in range(len(parts) - 1, 0, -1):
+        parent_path = ".".join(parts[:i])
+        candidate = f"{parent_path}.{suffix}"
+        if candidate in all_state_paths:
+            return True
+    
+    return False
+
+
+def _resolve_bare_target(target: str, current_full_path: str, states: dict, all_state_paths: set) -> bool:
+    """Resolve a bare target (no prefix) to check if it's a valid sibling.
+    
+    E.g., from 'navigation.app_idle.loading', target 'ready' should resolve
+    to 'navigation.app_idle.ready' (sibling in same parent).
+    """
+    parts = current_full_path.split(".")
+    
+    # Try each ancestor as a potential parent
+    for i in range(len(parts) - 1, 0, -1):
+        parent_path = ".".join(parts[:i])
+        candidate = f"{parent_path}.{target}"
+        if candidate in all_state_paths:
+            return True
+    
+    return False
+
+
 def _find_invalid_in_states(states: dict, all_state_paths: set, prefix: str = "") -> list:
     """Find invalid transitions recursively."""
     invalid = []
@@ -486,24 +661,28 @@ def _find_invalid_in_states(states: dict, all_state_paths: set, prefix: str = ""
                 if not t:
                     continue
                 
-                # Check if target exists
-                if t not in all_state_paths:
-                    # Try to resolve relative
-                    resolved = False
-                    if t.startswith("."):
-                        simple = t[1:]
-                        sub_states = state_config.get("states", {})
-                        if simple in sub_states:
-                            resolved = True
-                    
-                    if not resolved:
-                        invalid.append({
-                            "from_state": full_path,
-                            "event": event,
-                            "target": t,
-                            "issue": "INVALID_TARGET",
-                            "description": f"Transition '{event}' from '{full_path}' points to '{t}' which does not exist"
-                        })
+                # Check if target exists directly
+                if t in all_state_paths:
+                    continue
+                
+                # Try to resolve relative target (.suffix → sibling in parent)
+                if t.startswith("."):
+                    if _resolve_relative_target(t, full_path, states, all_state_paths):
+                        continue
+                
+                # Try to resolve bare target (loading, ready, error → sibling in parent)
+                elif "." not in t and not t.startswith("#"):
+                    if _resolve_bare_target(t, full_path, states, all_state_paths):
+                        continue
+                
+                # Target doesn't exist
+                invalid.append({
+                    "from_state": full_path,
+                    "event": event,
+                    "target": t,
+                    "issue": "INVALID_TARGET",
+                    "description": f"Transition '{event}' from '{full_path}' points to '{t}' which does not exist"
+                })
         
         # Recurse
         if "states" in state_config and isinstance(state_config["states"], dict):

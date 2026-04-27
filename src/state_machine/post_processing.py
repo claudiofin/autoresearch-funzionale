@@ -359,12 +359,13 @@ def fix_broken_transitions(machine: dict) -> dict:
     - '#navigation.app_idle' (XState selector syntax, invalid in JSON)
     - 'navigation.session_expired' (when session_expired is a sibling, not child)
     - '.none.error' (relative path to non-existent state)
+    - 'authenticating' (bare name, should be 'auth_guard.validating' or similar)
+    - 'ready'/'error'/'loading' (bare names that need context-aware resolution)
     
-    This function redirects broken transitions to valid fallback states:
-    - CANCEL → app_idle (or nearest valid parent)
-    - RETRY → loading (or nearest valid parent)
-    - START_APP → authenticating
-    - Other events → app_idle
+    This function uses a two-phase approach:
+    1. Build a complete index of all state paths (including nested)
+    2. Resolve bare targets by searching the tree contextually
+    3. Fall back to event-based defaults if no match found
     
     Supports both flat and parallel architectures.
     
@@ -380,25 +381,169 @@ def fix_broken_transitions(machine: dict) -> dict:
     else:
         states_root = machine.get("states", {})
     
-    # Collect all valid state paths (flat list of all state names at all levels)
+    # Phase 1: Collect ALL valid state paths and build a short-name → full-path index
     valid_states = set()
+    short_to_full = {}  # short_name -> [full_path1, full_path2, ...]
     
     def collect_states(states_dict, prefix=""):
         for name in states_dict:
             full_path = f"{prefix}.{name}" if prefix else name
-            valid_states.add(name)  # Short name is always valid
-            valid_states.add(full_path)  # Full path is also valid
+            valid_states.add(name)
+            valid_states.add(full_path)
+            # Index short name → full path(s)
+            if name not in short_to_full:
+                short_to_full[name] = []
+            short_to_full[name].append(full_path)
             if "states" in states_dict[name]:
                 collect_states(states_dict[name]["states"], full_path)
     
     collect_states(states_root)
     
-    # Also add known valid targets for parallel architecture
+    # Also add top-level machine states (outside navigation)
+    top_level_states = set()
     if machine.get("type") == "parallel":
-        # Top-level machine states (outside navigation)
         for name in machine.get("states", {}):
             if name != "navigation":
                 valid_states.add(name)
+                top_level_states.add(name)
+    
+    # Phase 2: Context-aware resolution helpers
+    def _find_substate_of(source_state, target_short):
+        """Try to find target_short as a sub-state of source_state's parent chain."""
+        parts = source_state.split(".")
+        # Walk up the parent chain looking for the target as a sibling/sub
+        for i in range(len(parts), 0, -1):
+            parent_prefix = ".".join(parts[:i])
+            candidate = f"{parent_prefix}.{target_short}" if parent_prefix else target_short
+            if candidate in valid_states:
+                return candidate
+        return None
+    
+    def _find_in_sibling_branches(source_state, target_short):
+        """Try to find target_short in sibling branches of the source state."""
+        parts = source_state.split(".")
+        if len(parts) >= 2:
+            # Try as sibling of immediate parent
+            parent_prefix = ".".join(parts[:-1])
+            for candidate_path in short_to_full.get(target_short, []):
+                if candidate_path.startswith(parent_prefix + "."):
+                    return candidate_path
+        return None
+    
+    def _smart_resolve(target_str, source_state, event_name):
+        """Resolve a bare target name to a full path using context."""
+        event_upper = event_name.upper() if event_name else ""
+        
+        # If target already exists as-is, no fix needed
+        if target_str in valid_states:
+            return target_str
+        
+        # Try to find as sub-state of source's parent chain
+        resolved = _find_substate_of(source_state, target_str)
+        if resolved:
+            return resolved
+        
+        # Try to find in sibling branches
+        resolved = _find_in_sibling_branches(source_state, target_str)
+        if resolved:
+            return resolved
+        
+        # Event-based fallback with context-aware targets
+        if "CANCEL" in event_upper or "GO_BACK" in event_upper:
+            # Try to go to parent state
+            parts = source_state.split(".")
+            if len(parts) > 1:
+                parent = ".".join(parts[:-1])
+                if parent in valid_states:
+                    return parent
+            return "app_idle" if "app_idle" in valid_states else None
+        
+        elif "RETRY" in event_upper or "REFRESH" in event_upper:
+            # If source IS a loading state, RETRY → self
+            if source_state == "loading" or source_state.endswith(".loading"):
+                return source_state
+            # Try loading sub-state of current state's parent
+            parts = source_state.split(".")
+            if len(parts) >= 2:
+                parent = ".".join(parts[:-1])
+                loading_candidate = f"{parent}.loading"
+                if loading_candidate in valid_states:
+                    return loading_candidate
+            return "app_idle" if "app_idle" in valid_states else None
+        
+        elif "START_APP" in event_upper:
+            # START_APP should go to auth flow
+            for path in short_to_full.get("auth_guard", []):
+                return path
+            for path in short_to_full.get("login", []):
+                return path
+            # Fallback: authenticating (flat state)
+            if "authenticating" in valid_states:
+                return "authenticating"
+            return "app_idle" if "app_idle" in valid_states else None
+        
+        elif "REAUTHENTICATE" in event_upper:
+            # REAUTHENTICATE should go to auth validation
+            for path in short_to_full.get("auth_guard", []):
+                return path
+            for path in short_to_full.get("login", []):
+                return path
+            return "app_idle" if "app_idle" in valid_states else None
+        
+        elif "TIMEOUT" in event_upper:
+            # TIMEOUT → error sub-state of parent
+            parts = source_state.split(".")
+            if len(parts) >= 2:
+                parent = ".".join(parts[:-1])
+                error_candidate = f"{parent}.error"
+                if error_candidate in valid_states:
+                    return error_candidate
+            return "app_error" if "app_error" in valid_states else None
+        
+        elif "ON_ERROR" in event_upper or "LOAD_FAILED" in event_upper:
+            # Error → error sub-state of parent
+            parts = source_state.split(".")
+            if len(parts) >= 2:
+                parent = ".".join(parts[:-1])
+                error_candidate = f"{parent}.error"
+                if error_candidate in valid_states:
+                    return error_candidate
+            return "app_error" if "app_error" in valid_states else None
+        
+        elif "DATA_LOADED" in event_upper or "ON_SUCCESS" in event_upper:
+            # Success → ready sub-state of parent, or dashboard for auth flows
+            parts = source_state.split(".")
+            if len(parts) >= 2:
+                parent = ".".join(parts[:-1])
+                ready_candidate = f"{parent}.ready"
+                if ready_candidate in valid_states:
+                    return ready_candidate
+            # Auth flow success → dashboard
+            for path in short_to_full.get("dashboard", []):
+                return path
+            return "app_idle" if "app_idle" in valid_states else None
+        
+        elif "AUTH_SUCCESS" in event_upper:
+            # Auth success → dashboard
+            for path in short_to_full.get("dashboard", []):
+                return path
+            return "app_idle" if "app_idle" in valid_states else None
+        
+        elif "AUTH_FAILED" in event_upper or "LOGIN_FAILED" in event_upper:
+            # Auth failure → login
+            for path in short_to_full.get("login", []):
+                return path
+            return "app_error" if "app_error" in valid_states else None
+        
+        elif "COMPLETE" in event_upper or "COMPLETED" in event_upper:
+            # Workflow complete → return to navigation root
+            return "app_idle" if "app_idle" in valid_states else None
+        
+        # Last resort: use first match from index or None
+        if target_str in short_to_full and short_to_full[target_str]:
+            return short_to_full[target_str][0]
+        
+        return None  # Cannot resolve
     
     fixed_count = 0
     
@@ -422,34 +567,16 @@ def fix_broken_transitions(machine: dict) -> dict:
         if target_str in valid_states:
             return target_str, False
         
-        # Target doesn't exist - determine fallback based on event name
-        event_upper = event_name.upper() if event_name else ""
+        # Phase 2: Smart resolution
+        resolved = _smart_resolve(target_str, source_state, event_name)
         
-        if "CANCEL" in event_upper or "GO_BACK" in event_upper:
-            fallback = "app_idle"
-        elif "RETRY" in event_upper or "REFRESH" in event_upper:
-            fallback = "loading"
-        elif "START_APP" in event_upper:
-            fallback = "authenticating"
-        elif "REAUTHENTICATE" in event_upper:
-            fallback = "authenticating"
-        elif "TIMEOUT" in event_upper:
-            fallback = "error"
-        elif "ON_ERROR" in event_upper or "LOAD_FAILED" in event_upper:
-            fallback = "error"
-        elif "DATA_LOADED" in event_upper or "ON_SUCCESS" in event_upper:
-            fallback = "ready"
-        else:
-            # Generic fallback: try to find a valid state with similar name
-            # or default to app_idle
-            fallback = "app_idle"
+        if resolved:
+            print(f"  🔧 Fixed broken transition: {source_state} --{event_name}-> '{original}' → '{resolved}'")
+            return resolved, True
         
-        # Check if fallback exists in valid states
-        if fallback not in valid_states:
-            # If fallback doesn't exist, use the first valid state as last resort
-            fallback = "app_idle" if "app_idle" in valid_states else (list(valid_states)[0] if valid_states else "app_idle")
-        
-        print(f"  🔧 Fixed broken transition: {source_state} --{event_name}-> '{original}' → '{fallback}'")
+        # Absolute last resort: app_idle
+        fallback = "app_idle" if "app_idle" in valid_states else (list(valid_states)[0] if valid_states else "app_idle")
+        print(f"  🔧 Fixed broken transition (fallback): {source_state} --{event_name}-> '{original}' → '{fallback}'")
         return fallback, True
     
     def walk_and_fix(states_dict, depth=0):
@@ -566,6 +693,100 @@ def remove_duplicate_states(machine: dict) -> dict:
     
     if duplicates_to_remove:
         print(f"  ✅ Removed {len(duplicates_to_remove)} duplicate states")
+    
+    return machine
+
+
+# ---------------------------------------------------------------------------
+# Post-Processing: Fix Structural Issues (Empty states, dead-ends, navigation duplicates)
+# ---------------------------------------------------------------------------
+
+def fix_structural_issues(machine: dict) -> dict:
+    """Fix structural issues that cause validation failures.
+    
+    Handles:
+    - INVALID_COMPOUND_STATE: Removes empty 'states' dicts from compound states
+    - DEAD_END_STATE: Adds exit transitions to states with no exits
+    - DUPLICATE_STATE: Fixes navigation duplicates (navigation.navigation)
+    
+    Args:
+        machine: The state machine dict to fix.
+    
+    Returns:
+        Fixed machine dict.
+    """
+    # For parallel architecture, work with navigation branch states
+    if machine.get("type") == "parallel" and "navigation" in machine.get("states", {}):
+        states_root = machine["states"]["navigation"].get("states", {})
+    else:
+        states_root = machine.get("states", {})
+    
+    fixed_empty = 0
+    fixed_dead_ends = 0
+    fixed_duplicates = 0
+    
+    def walk_and_fix(states_dict, parent_path=""):
+        nonlocal fixed_empty, fixed_dead_ends, fixed_duplicates
+        
+        for state_name in list(states_dict.keys()):
+            state_config = states_dict[state_name]
+            current_path = f"{parent_path}.{state_name}" if parent_path else state_name
+            
+            # Fix 1: Remove empty 'states' dict (INVALID_COMPOUND_STATE)
+            if "states" in state_config:
+                sub_states = state_config["states"]
+                if not sub_states or len(sub_states) == 0:
+                    del state_config["states"]
+                    # Also remove 'initial' if present since it's no longer a compound state
+                    if "initial" in state_config:
+                        del state_config["initial"]
+                    fixed_empty += 1
+                    print(f"  🔧 Fixed empty compound state: '{current_path}' (converted to atomic)")
+                else:
+                    # Fix initial mismatch: initial must point to an existing sub-state
+                    if "initial" in state_config:
+                        initial_state = state_config["initial"]
+                        if initial_state not in sub_states:
+                            # Pick first available sub-state as initial
+                            first_sub = list(sub_states.keys())[0]
+                            state_config["initial"] = first_sub
+                            print(f"  🔧 Fixed initial mismatch: '{current_path}' initial '{initial_state}' → '{first_sub}'")
+                    # Recurse into sub-states
+                    walk_and_fix(sub_states, current_path)
+            
+            # Fix 2: Add exit transitions to dead-end states (DEAD_END_STATE)
+            on_events = state_config.get("on", {})
+            if not on_events and state_name not in ["app_idle", "dashboard", "success"]:
+                # This is a dead-end state - add exit transitions
+                state_config["on"] = {
+                    "GO_BACK": parent_path if parent_path else "app_idle",
+                    "CANCEL": "app_idle"
+                }
+                fixed_dead_ends += 1
+                print(f"  🔧 Fixed dead-end state: '{current_path}' (added GO_BACK, CANCEL transitions)")
+        
+        # Fix 3: Handle navigation duplicates (e.g., navigation.navigation)
+        if "navigation" in states_dict and parent_path.endswith("navigation"):
+            # This is navigation.navigation - merge or remove
+            nav_state = states_dict["navigation"]
+            parent_nav = states_root  # Get the parent navigation
+            
+            # Merge sub-states from navigation.navigation into parent navigation
+            if "states" in nav_state and nav_state["states"]:
+                for sub_name, sub_config in nav_state["states"].items():
+                    if sub_name not in parent_nav:
+                        parent_nav[sub_name] = sub_config
+                        print(f"  🔧 Merged duplicate navigation state: '{sub_name}'")
+            
+            # Remove the duplicate navigation state
+            del states_dict["navigation"]
+            fixed_duplicates += 1
+            print(f"  🔧 Removed duplicate navigation state: '{current_path}.navigation'")
+    
+    walk_and_fix(states_root)
+    
+    if fixed_empty > 0 or fixed_dead_ends > 0 or fixed_duplicates > 0:
+        print(f"  ✅ Structural fixes: {fixed_empty} empty states, {fixed_dead_ends} dead-ends, {fixed_duplicates} duplicates")
     
     return machine
 

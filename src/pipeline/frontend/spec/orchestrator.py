@@ -18,7 +18,7 @@ from state_machine.builder import generate_base_machine, build_state_config, add
 from state_machine.post_processing import (
     remove_toplevel_duplicates, complete_missing_branches, clean_unreachable_states,
     validate_no_critical_patterns, create_missing_target_states,
-    fix_broken_transitions, remove_duplicate_states
+    fix_broken_transitions, remove_duplicate_states, fix_structural_issues
 )
 from diagrams.plantuml import generate_plantuml_statechart, generate_plantuml_sequence
 from diagrams.markdown import generate_spec_markdown, _make_serializable
@@ -224,6 +224,10 @@ def run_analysis(
     # Post-processing: Remove duplicate states (same name at different paths)
     print("\n  🧹 Post-processing: Removing duplicate states...")
     machine = remove_duplicate_states(machine)
+    
+    # Post-processing: Fix structural issues (empty states, dead-ends, navigation duplicates)
+    print("\n  🔧 Post-processing: Fixing structural issues...")
+    machine = fix_structural_issues(machine)
     
     # Post-processing: validate against critical rules
     violations = validate_no_critical_patterns(machine)
