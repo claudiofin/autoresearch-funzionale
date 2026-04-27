@@ -41,10 +41,7 @@ from .builder import (
     _resolve_action_name,
 )
 from .post_processing import (
-    complete_missing_branches,
-    clean_unreachable_states,
-    validate_no_critical_patterns,
-    create_missing_target_states,
+    aggressive_cleanup,
 )
 from .validation import (
     load_machine,
@@ -73,10 +70,7 @@ __all__ = [
     "DEFAULT_EMERGENCY_EVENTS",
     "XSTATE_ACTION_MAP",
     # Post-processing
-    "complete_missing_branches",
-    "clean_unreachable_states",
-    "validate_no_critical_patterns",
-    "create_missing_target_states",
+    "aggressive_cleanup",
     # Validation
     "load_machine",
     "find_dead_end_states",
