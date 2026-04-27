@@ -45,6 +45,9 @@ from state_machine.injection import (
 from state_machine.cleanup import (
     apply_dead_state_cleanup, apply_specificity_dedup, apply_dead_end_pruning,
     apply_phantom_state_cleanup, apply_workflow_dedup,
+    remove_empty_states_dict, fix_relative_transitions,
+    fix_start_app_transitions, connect_unreachable_states,
+    fix_initial_state, connect_sibling_substates,
 )
 from state_machine.target_resolution import (
     apply_target_resolution, apply_target_crosscheck,
@@ -391,6 +394,9 @@ def compile_machine(machine: dict, max_iterations: int = 1) -> dict:
         machine = auto_inject_sub_states(machine)
         print(f"  🔍 [DEBUG] after auto_inject_sub_states: {_count_states(machine)} states")
         
+        machine = remove_empty_states_dict(machine)  # FIX: Remove empty 'states: {}' → INVALID_COMPOUND
+        print(f"  🔍 [DEBUG] after remove_empty_states_dict: {_count_states(machine)} states")
+        
         machine = apply_specificity_dedup(machine)
         print(f"  🔍 [DEBUG] after apply_specificity_dedup: {_count_states(machine)} states")
         
@@ -409,8 +415,17 @@ def compile_machine(machine: dict, max_iterations: int = 1) -> dict:
         machine = apply_dead_state_cleanup(machine)
         print(f"  🔍 [DEBUG] after apply_dead_state_cleanup: {_count_states(machine)} states")
         
+        machine = connect_unreachable_states(machine)  # FIX: Connect unreachable states to nav graph
+        print(f"  🔍 [DEBUG] after connect_unreachable_states: {_count_states(machine)} states")
+        
         machine = apply_target_resolution(machine)
         print(f"  🔍 [DEBUG] after apply_target_resolution: {_count_states(machine)} states")
+        
+        machine = fix_relative_transitions(machine)  # FIX: Resolve relative targets like '.none.ready'
+        print(f"  🔍 [DEBUG] after fix_relative_transitions: {_count_states(machine)} states")
+        
+        machine = fix_start_app_transitions(machine)  # FIX: authenticating → auth_guard
+        print(f"  🔍 [DEBUG] after fix_start_app_transitions: {_count_states(machine)} states")
         
         machine = apply_context_awareness(machine)
         print(f"  🔍 [DEBUG] after apply_context_awareness: {_count_states(machine)} states")
@@ -429,6 +444,12 @@ def compile_machine(machine: dict, max_iterations: int = 1) -> dict:
         
         machine = apply_workflow_dedup(machine)  # Remove duplicate workflow states at root level
         print(f"  🔍 [DEBUG] after apply_workflow_dedup: {_count_states(machine)} states")
+        
+        machine = fix_initial_state(machine)  # FIX: root initial must point to real state, not branch
+        print(f"  🔍 [DEBUG] after fix_initial_state: initial={machine.get('initial')}")
+        
+        machine = connect_sibling_substates(machine)  # FIX: connect loading↔ready↔error within compounds
+        print(f"  🔍 [DEBUG] after connect_sibling_substates: {_count_states(machine)} states")
         
         try:
             after = json.dumps(machine, sort_keys=True, default=str)
